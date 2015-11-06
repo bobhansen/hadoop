@@ -22,7 +22,9 @@
 
 #include <asio/ip/tcp.hpp>
 
+#include <functional>
 #include <limits>
+#include <future>
 
 namespace hdfs {
 
@@ -32,37 +34,17 @@ static const int kNamenodeProtocolVersion = 1;
 
 using ::asio::ip::tcp;
 
-FileSystem::~FileSystem() {}
+/*****************************************************************************
+ *                    NAMENODE OPERATIONS
+ ****************************************************************************/
 
-void FileSystem::New(
-    IoService *io_service, const Options &options, const std::string &server,
-    const std::string &service,
-    const std::function<void(const Status &, FileSystem *)> &handler) {
-  FileSystemImpl *impl = new FileSystemImpl(io_service, options);
-  impl->Connect(server, service, [impl, handler](const Status &stat) {
-    if (stat.ok()) {
-      handler(stat, impl);
-    } else {
-      delete impl;
-      handler(stat, nullptr);
-    }
-  });
-}
-
-FileSystemImpl::FileSystemImpl(IoService *io_service, const Options &options)
-    : io_service_(static_cast<IoServiceImpl *>(io_service)),
-      engine_(&io_service_->io_service(), options,
-              RpcEngine::GetRandomClientName(), kNamenodeProtocol,
-              kNamenodeProtocolVersion),
-      namenode_(&engine_) {}
-
-void FileSystemImpl::Connect(const std::string &server,
+void NameNodeOperations::Connect(const std::string &server,
                              const std::string &service,
-                             std::function<void(const Status &)> &&handler) {
-  using namespace continuation;
+                             std::function<void(const Status &)> &handler) {
+  using namespace asio_continuation;
   typedef std::vector<tcp::endpoint> State;
   auto m = Pipeline<State>::Create();
-  m->Push(Resolve(&io_service_->io_service(), server, service,
+  m->Push(Resolve(io_service_, server, service,
                   std::back_inserter(m->state())))
       .Push(Bind([this, m](const Continuation::Next &next) {
         engine_.Connect(m->state().front(), next);
@@ -75,9 +57,9 @@ void FileSystemImpl::Connect(const std::string &server,
   });
 }
 
-void FileSystemImpl::Open(
-    const std::string &path,
-    const std::function<void(const Status &, InputStream *)> &handler) {
+void NameNodeOperations::GetBlockLocations(const std::string & path,
+  std::function<void(const Status &, std::shared_ptr<const struct FileInfo>)> handler)
+{
   using ::hadoop::hdfs::GetBlockLocationsRequestProto;
   using ::hadoop::hdfs::GetBlockLocationsResponseProto;
 
@@ -98,9 +80,174 @@ void FileSystemImpl::Open(
       [this, s](const continuation::Continuation::Next &next) {
         namenode_.GetBlockLocations(&s->req, s->resp, next);
       }));
+
   m->Run([this, handler](const Status &stat, const State &s) {
-    handler(stat, stat.ok() ? new InputStreamImpl(this, &s.resp->locations())
+    if (stat.ok()) {
+      auto file_info = std::make_shared<struct FileInfo>();
+      auto locations = s.resp->locations();
+
+      file_info->file_length_ = locations.filelength();
+
+      for (const auto &block : locations.blocks()) {
+        file_info->blocks_.push_back(block);
+      }
+
+      if (locations.has_lastblock() && locations.lastblock().b().numbytes()) {
+        file_info->blocks_.push_back(locations.lastblock());
+      }
+
+      handler(stat, file_info);
+    } else {
+      handler(stat, nullptr);
+    }
+  });
+}
+
+
+/*****************************************************************************
+ *                    FILESYSTEM BASE CLASS
+ ****************************************************************************/
+
+void FileSystem::New(
+    IoService *io_service, const Options &options, const std::string &server,
+    const std::string &service,
+    const std::function<void(const Status &, FileSystem *)> &handler) {
+  FileSystemImpl *impl = new FileSystemImpl(io_service, options);
+  impl->Connect(server, service, [impl, handler](const Status &stat) {
+    if (stat.ok()) {
+      handler(stat, impl);
+    } else {
+      delete impl;
+      handler(stat, nullptr);
+    }
+  });
+}
+
+FileSystem * FileSystem::New(
+    IoService *io_service, const Options &options, const std::string &server,
+    const std::string &service) {
+  auto stat = std::make_shared<std::promise<std::pair<Status, FileSystem *>>>();
+  std::future<std::pair<Status, FileSystem *>> future = stat->get_future();
+
+  auto callback = [stat](const Status &s, FileSystem * fs) {
+    std::pair<Status, FileSystem *> value(s, fs);
+    stat->set_value(value);
+  };
+
+  New(io_service, options, server, service, callback);
+
+  /* block until promise is set */
+  auto s = future.get();
+
+  if (s.first.ok())
+    return s.second;
+  else
+    return nullptr;
+}
+
+/*****************************************************************************
+ *                    FILESYSTEM IMPLEMENTATION
+ ****************************************************************************/
+
+FileSystemImpl::FileSystemImpl(IoService *&io_service, const Options &options)
+  :   io_service_(static_cast<IoServiceImpl *>(io_service)),
+      nn_(&io_service_->io_service(), options,
+          GetRandomClientName(), kNamenodeProtocol,
+          kNamenodeProtocolVersion),
+      client_name_(GetRandomClientName())
+{
+  // Poor man's move
+  io_service = nullptr;
+
+  /* spawn background threads for asio delegation */
+  unsigned int threads = 1 /* options.io_threads_, pending HDFS-9117 */;
+  for (unsigned int i = 0; i < threads; i++) {
+    AddWorkerThread();
+  }
+}
+
+FileSystemImpl::~FileSystemImpl() {
+  /**
+   * Note: IoService must be stopped before getting rid of worker threads.
+   * Once worker threads are joined and deleted the service can be deleted.
+   **/
+  io_service_->Stop();
+  worker_threads_.clear();
+  io_service_.reset(nullptr);
+}
+
+void FileSystemImpl::Connect(const std::string &server,
+                             const std::string &service,
+                             std::function<void(const Status &)> &&handler) {
+  /* IoService::New can return nullptr */
+  if (!io_service_) {
+    handler (Status::Error("Null IoService"));
+  }
+  nn_.Connect(server, service, handler);
+}
+
+Status FileSystemImpl::Connect(const std::string &server, const std::string &service) {
+  /* synchronized */
+  auto stat = std::make_shared<std::promise<Status>>();
+  std::future<Status> future = stat->get_future();
+
+  auto callback = [stat](const Status &s) {
+    stat->set_value(s);
+  };
+
+  Connect(server, service, callback);
+
+  /* block until promise is set */
+  auto s = future.get();
+
+  return s;
+}
+
+
+int FileSystemImpl::AddWorkerThread() {
+  auto service_task = [](IoService *service) { service->Run(); };
+  worker_threads_.push_back(
+      WorkerPtr(new std::thread(service_task, io_service_.get())));
+  return worker_threads_.size();
+}
+
+void FileSystemImpl::Open(
+    const std::string &path,
+    const std::function<void(const Status &, FileHandle *)> &handler) {
+
+  nn_.GetBlockLocations(path, [this, handler](const Status &stat, std::shared_ptr<const struct FileInfo> file_info) {
+    handler(stat, stat.ok() ? new FileHandleImpl(&io_service_->io_service(), client_name_, file_info)
                             : nullptr);
   });
 }
+
+Status FileSystemImpl::Open(const std::string &path,
+                                         FileHandle **handle) {
+  auto stat = std::make_shared<std::promise<Status>>();
+  std::future<Status> future = stat->get_future();
+
+  /* wrap async FileSystem::Open with promise to make it a blocking call */
+  FileHandle *input_stream = nullptr;
+  auto h = [stat, &input_stream](const Status &s, FileHandle *is) {
+    stat->set_value(s);
+    input_stream = is;
+  };
+
+  Open(path, h);
+
+  /* block until promise is set */
+  auto s = future.get();
+
+  if (!s.ok()) {
+    delete input_stream;
+    return s;
+  }
+  if (!input_stream) {
+    return s;
+  }
+
+  *handle = input_stream;
+  return s;
+}
+
 }

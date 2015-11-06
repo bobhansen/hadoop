@@ -16,31 +16,20 @@
  * limitations under the License.
  */
 
-#include "filesystem.h"
+#include "datanodeconnection.h"
+#include "common/util.h"
 
 namespace hdfs {
 
-using ::hadoop::hdfs::LocatedBlocksProto;
-
-InputStream::~InputStream() {}
-
-InputStreamImpl::InputStreamImpl(FileSystemImpl *fs,
-                                 const LocatedBlocksProto *blocks)
-    : fs_(fs), file_length_(blocks->filelength()) {
-  for (const auto &block : blocks->blocks()) {
-    blocks_.push_back(block);
-  }
-
-  if (blocks->has_lastblock() && blocks->lastblock().b().numbytes()) {
-    blocks_.push_back(blocks->lastblock());
-  }
+void DataNodeConnectionImpl::Connect(
+             std::function<void(Status status, std::shared_ptr<DataNodeConnection> dn)> handler) {
+  // Keep the DN from being freed until we're done
+  auto shared_this = shared_from_this();
+  asio::async_connect(*conn_, endpoints_.begin(), endpoints_.end(),
+          [shared_this, handler](const asio::error_code &ec, std::array<asio::ip::tcp::endpoint, 1>::iterator it) {
+            (void)it;
+            handler(ToStatus(ec), shared_this); });
 }
 
-void InputStreamImpl::PositionRead(
-    void *buf, size_t nbyte, uint64_t offset,
-    const std::set<std::string> &excluded_datanodes,
-    const std::function<void(const Status &, const std::string &, size_t)>
-        &handler) {
-  AsyncPreadSome(offset, asio::buffer(buf, nbyte), excluded_datanodes, handler);
-}
+
 }

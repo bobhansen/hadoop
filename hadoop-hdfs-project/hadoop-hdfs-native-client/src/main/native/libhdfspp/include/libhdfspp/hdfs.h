@@ -20,6 +20,7 @@
 
 #include "libhdfspp/options.h"
 #include "libhdfspp/status.h"
+#include "common/cancelable.h"
 
 #include <functional>
 #include <set>
@@ -54,9 +55,9 @@ public:
 };
 
 /**
- * Applications opens an InputStream to read files in HDFS.
+ * Applications opens a FileHandle to read files in HDFS.
  **/
-class InputStream {
+class FileHandle {
 public:
   /**
    * Read data from a specific position. The current implementation
@@ -71,12 +72,13 @@ public:
    * The handler returns the datanode that serves the block and the number of
    * bytes has read.
    **/
-  virtual void
+  virtual CancelHandle
   PositionRead(void *buf, size_t nbyte, uint64_t offset,
-               const std::set<std::string> &excluded_datanodes,
-               const std::function<void(const Status &, const std::string &,
-                                        size_t)> &handler) = 0;
-  virtual ~InputStream();
+               const std::function<void(const Status &, size_t)> &handler) = 0;
+
+  virtual size_t PositionRead(void *buf, size_t nbyte, off_t offset) = 0;
+
+  virtual ~FileHandle();
 };
 
 /**
@@ -93,6 +95,12 @@ public:
   New(IoService *io_service, const Options &options, const std::string &server,
       const std::string &service,
       const std::function<void(const Status &, FileSystem *)> &handler);
+
+  /* Synchronous call of New*/
+  static FileSystem *
+  New(IoService *io_service, const Options &options, const std::string &server,
+      const std::string &service);
+
   /**
    * Open a file on HDFS. The call issues an RPC to the NameNode to
    * gather the locations of all blocks in the file and to return a
@@ -100,8 +108,11 @@ public:
    **/
   virtual void
   Open(const std::string &path,
-       const std::function<void(const Status &, InputStream *)> &handler) = 0;
-  virtual ~FileSystem();
+       const std::function<void(const Status &, FileHandle *)> &handler) = 0;
+  virtual Status Open(const std::string &path, FileHandle **handle);
+
+  virtual ~FileSystem() {};
+
 };
 }
 
