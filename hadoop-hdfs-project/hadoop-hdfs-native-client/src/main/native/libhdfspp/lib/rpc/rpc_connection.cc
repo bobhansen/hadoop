@@ -196,7 +196,9 @@ void RpcConnection::HandleRpcResponse(std::shared_ptr<Response> response) {
   }
 
   Status status;
-  if (h.has_exceptionclassname()) {
+  if (random() % 100 == 0) {
+    status = Status::Exception("RandomException", "random exception");
+  } else if (h.has_exceptionclassname()) {
     status =
         Status::Exception(h.exceptionclassname().c_str(), h.errormsg().c_str());
   }
