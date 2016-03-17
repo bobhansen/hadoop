@@ -1,3 +1,4 @@
+
 /**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -76,6 +77,8 @@ static int hdfsSingleNameNodeConnect(struct NativeMiniDfsCluster *cl, hdfsFS *fs
                           TO_STR(TLH_DEFAULT_BLOCK_SIZE));
     hdfsBuilderConfSetStr(bld, "dfs.replication",
                           TO_STR(TLH_DEFAULT_DFS_REPLICATION));
+    fprintf(stderr, "hdfsSingleNameNodeConnect: settings %s to %s\n",
+        "ipc.client.connect.max.retries", TO_STR(TLH_DEFAULT_IPC_CLIENT_CONNECT_MAX_RETRIES));
     hdfsBuilderConfSetStr(bld, "ipc.client.connect.max.retries",
                           TO_STR(TLH_DEFAULT_IPC_CLIENT_CONNECT_MAX_RETRIES));
     if (username) {

@@ -66,6 +66,7 @@ void RpcEngine::Shutdown() {
 std::unique_ptr<const RetryPolicy> RpcEngine::MakeRetryPolicy(const Options &options) {
   LogMessage(kDebug, kRPC) << "RpcEngine::MakeRetryPolicy called";
   if (options.max_rpc_retries > 0) {
+    LogMessage(kDebug, kRPC) << "RpcEngine::MakeRetryPolicy creating policy; delay=" << options.rpc_retry_delay_ms << " max_rpc_retries=" << options.max_rpc_retries;
     return std::unique_ptr<RetryPolicy>(new FixedDelayRetryPolicy(options.rpc_retry_delay_ms, options.max_rpc_retries));
   } else {
     return nullptr;
@@ -160,9 +161,11 @@ void RpcEngine::RpcCommsError(
 
     RetryAction retry = RetryAction::fail(""); // Default to fail
     if (retry_policy()) {
+      LogMessage(kDebug, kRPC) << "RpcEngine::RpcCommsError - checking policy";
       retry = retry_policy()->ShouldRetry(status, req->IncrementRetryCount(), 0, true);
     }
 
+    LogMessage(kDebug, kRPC) << "RpcEngine::RpcCommsError - retry action = " << retry.action;
     if (retry.action == RetryAction::FAIL) {
       // If we've exceeded the maximum retry, take the latest error and pass it
       //    on.  There might be a good argument for caching the first error
@@ -185,6 +188,8 @@ void RpcEngine::RpcCommsError(
   //    the NN
   if (!pendingRequests.empty() &&
           head_action && head_action->action != RetryAction::FAIL) {
+    LogMessage(kDebug, kRPC) << "RpcEngine::RpcCommsError - retrying connection";
+
     conn_ = NewConnection();
 
     conn_->PreEnqueueRequests(pendingRequests);

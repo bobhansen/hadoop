@@ -165,8 +165,12 @@ RpcConnection::RpcConnection(LockFreeRpcEngine *engine)
 }
 
 void RpcConnection::StartReading() {
-  io_service().post(std::bind(&RpcConnection::OnRecvCompleted, this,
-                              ::asio::error_code(), 0));
+  // If this throws a bad_weak_ptr exception, it's because you created an
+  // RpcConnectionImpl without using std::make_shared
+  std::shared_ptr<RpcConnection> shared_this = shared_from_this();
+  io_service().post([shared_this, this] {
+    OnRecvCompleted(::asio::error_code(), 0);
+  });
 }
 
 void RpcConnection::AsyncFlushPendingRequests() {
@@ -183,6 +187,8 @@ void RpcConnection::AsyncFlushPendingRequests() {
 void RpcConnection::HandleRpcResponse(std::shared_ptr<Response> response) {
   assert(lock_held(connection_state_lock_));  // Must be holding lock before calling
 
+  LogMessage(kDebug, kRPC) << "RpcConnection::HandleRpcResponse";
+
   response->ar.reset(new pbio::ArrayInputStream(&response->data_[0], response->data_.size()));
   response->in.reset(new pbio::CodedInputStream(response->ar.get()));
   response->in->PushLimit(response->data_.size());
@@ -196,9 +202,7 @@ void RpcConnection::HandleRpcResponse(std::shared_ptr<Response> response) {
   }
 
   Status status;
-  if (random() % 100 == 0) {
-    status = Status::Exception("RandomException", "random exception");
-  } else if (h.has_exceptionclassname()) {
+  if (h.has_exceptionclassname()) {
     status =
         Status::Exception(h.exceptionclassname().c_str(), h.errormsg().c_str());
   }

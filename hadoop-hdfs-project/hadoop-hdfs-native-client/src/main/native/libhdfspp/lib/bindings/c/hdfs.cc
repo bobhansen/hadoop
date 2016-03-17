@@ -193,6 +193,8 @@ hdfsFS doHdfsConnect(optional<std::string> nn, optional<tPort> port, optional<st
   {
     IoService * io_service = IoService::New();
 
+    LogMessage(kDebug, kFileSystem) << "doHdfsConnect: has options; max_rpc_retries=" << options.max_rpc_retries;
+
     FileSystem *fs = FileSystem::New(io_service, user.value_or(""), options);
     if (!fs) {
       ReportError(ENODEV, "Could not create FileSystem object");
@@ -478,22 +480,27 @@ void hdfsFreeBuilder(struct hdfsBuilder *bld)
 int hdfsBuilderConfSetStr(struct hdfsBuilder *bld, const char *key,
                           const char *val)
 {
+  LogMessage(kDebug, kFileSystem) << "hdfsBuilderConfSetStr: entering";
   try
   {
     optional<HdfsConfiguration> newConfig = bld->loader.OverlayValue(bld->config, key, val);
     if (newConfig)
     {
+      LogMessage(kDebug, kFileSystem) << "hdfsBuilderConfSetStr: successfully set " << key << "=" << val;
       bld->config = newConfig.value();
       return 0;
     }
     else
     {
+      LogMessage(kDebug, kFileSystem) << "hdfsBuilderConfSetStr: failed to set " << key << "=" << val;
       ReportError(EINVAL, "Could not change Builder value");
       return 1;
     }
   } catch (const std::exception & e) {
+    LogMessage(kError, kFileSystem) << "hdfsBuilderConfSetStr: error setting " << key << "=" << val;
     return ReportException(e);
   } catch (...) {
+    LogMessage(kError, kFileSystem) << "hdfsBuilderConfSetStr: unknown error setting " << key << "=" << val;
     return ReportCaughtNonException();
   }
 }
@@ -504,6 +511,7 @@ void hdfsConfStrFree(char *val)
 }
 
 hdfsFS hdfsBuilderConnect(struct hdfsBuilder *bld) {
+  LogMessage(kDebug, kFileSystem) << "hdfsBuilderConnect";
   return doHdfsConnect(bld->overrideHost, bld->overridePort, bld->user, bld->config.GetOptions());
 }
 

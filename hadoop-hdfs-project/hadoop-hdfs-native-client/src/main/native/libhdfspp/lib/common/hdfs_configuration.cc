@@ -17,6 +17,7 @@
  */
 
 #include "common/hdfs_configuration.h"
+#include "common/logging.h"
 
 namespace hdfs {
 
@@ -48,6 +49,8 @@ Options HdfsConfiguration::GetOptions() {
   OptionalSet(result.max_rpc_retries, GetInt(kIpcClientConnectMaxRetriesKey));
   OptionalSet(result.rpc_retry_delay_ms, GetInt(kIpcClientConnectRetryIntervalKey));
   OptionalSet(result.defaultFS, GetUri(kFsDefaultFsKey));
+
+  LogMessage(kDebug, kFileSystem) << "Options.max_rpc_retries =" << result.max_rpc_retries;
 
   return result;
 }
