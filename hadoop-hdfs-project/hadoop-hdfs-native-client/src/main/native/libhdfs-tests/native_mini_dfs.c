@@ -183,6 +183,14 @@ struct NativeMiniDfsCluster* nmdCreate(struct NativeMiniDfsConf *conf)
         (*env)->DeleteLocalRef(env, val.l);
     }
     jthr = invokeMethod(env, &val, INSTANCE, bld, MINIDFS_CLUSTER_BUILDER,
+            "numDataNodes", "(I)L" MINIDFS_CLUSTER_BUILDER ";", conf->numDataNodes);
+    if (jthr) {
+        printExceptionAndFree(env, jthr, PRINT_EXC_ALL, "nmdCreate: "
+                              "Builder::numDataNodes");
+        goto error;
+    }
+    (*env)->DeleteLocalRef(env, val.l);
+    jthr = invokeMethod(env, &val, INSTANCE, bld, MINIDFS_CLUSTER_BUILDER,
             "build", "()L" MINIDFS_CLUSTER ";");
     if (jthr) {
         printExceptionAndFree(env, jthr, PRINT_EXC_ALL,

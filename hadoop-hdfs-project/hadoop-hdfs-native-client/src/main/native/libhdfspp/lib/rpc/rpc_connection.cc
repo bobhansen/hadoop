@@ -183,6 +183,8 @@ void RpcConnection::AsyncFlushPendingRequests() {
 void RpcConnection::HandleRpcResponse(std::shared_ptr<Response> response) {
   assert(lock_held(connection_state_lock_));  // Must be holding lock before calling
 
+  LogMessage(kDebug, kRPC) << "RpcConnection::HandleRpcResponse";
+
   response->ar.reset(new pbio::ArrayInputStream(&response->data_[0], response->data_.size()));
   response->in.reset(new pbio::CodedInputStream(response->ar.get()));
   response->in->PushLimit(response->data_.size());
@@ -196,7 +198,11 @@ void RpcConnection::HandleRpcResponse(std::shared_ptr<Response> response) {
   }
 
   Status status;
-  if (h.has_exceptionclassname()) {
+  // if (random() % 100 == 0) {
+  //   LogMessage(kDebug, kRPC) << "RpcConnection::HandleRpcResponse -- Simulating error";
+  //   status = Status::Exception("RandomException", "random exception");
+  // } else
+      if (h.has_exceptionclassname()) {
     status =
         Status::Exception(h.exceptionclassname().c_str(), h.errormsg().c_str());
   }

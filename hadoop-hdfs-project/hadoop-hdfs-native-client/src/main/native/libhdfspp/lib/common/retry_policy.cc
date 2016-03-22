@@ -17,6 +17,7 @@
  */
 
 #include "common/retry_policy.h"
+#include "common/logging.h"
 
 namespace hdfs {
 
@@ -25,6 +26,7 @@ RetryAction FixedDelayRetryPolicy::ShouldRetry(
     bool isIdempotentOrAtMostOnce) const {
   (void)s;
   (void)isIdempotentOrAtMostOnce;
+  LogMessage(kDebug, kRPC) << "FixedDealyRetryPolicy::ShouldRetry - retries=" << retries << " failovers=" << failovers << " max_retries=" << max_retries_;
   if (retries + failovers >= max_retries_) {
     return RetryAction::fail(
         "Failovers (" + std::to_string(retries + failovers) +

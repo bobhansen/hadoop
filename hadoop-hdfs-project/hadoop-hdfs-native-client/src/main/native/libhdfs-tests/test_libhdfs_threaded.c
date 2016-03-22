@@ -31,9 +31,15 @@
 #define TO_STR_HELPER(X) #X
 #define TO_STR(X) TO_STR_HELPER(X)
 
-#define TLH_MAX_THREADS 100
+#define TLH_MAX_THREADS 10000
 
-#define TLH_DEFAULT_BLOCK_SIZE 134217728
+#define TLH_DEFAULT_BLOCK_SIZE 1048576
+
+#define TLH_DEFAULT_DFS_REPLICATION 3
+
+#define TLH_DEFAULT_IPC_CLIENT_CONNECT_MAX_RETRIES 0
+
+#define TLH_DEFAULT_IPC_CLIENT_CONNECT_RETRY_INTERVAL_MS 500
 
 static struct NativeMiniDfsCluster* tlhCluster;
 
@@ -44,6 +50,8 @@ struct tlhThreadInfo {
     int success;
     /** thread identifier */
     thread theThread;
+    /** fs, might share with other threads **/
+    hdfsFS hdfs;
 };
 
 static int hdfsSingleNameNodeConnect(struct NativeMiniDfsCluster *cl, hdfsFS *fs,
@@ -70,6 +78,12 @@ static int hdfsSingleNameNodeConnect(struct NativeMiniDfsCluster *cl, hdfsFS *fs
                           TO_STR(TLH_DEFAULT_BLOCK_SIZE));
     hdfsBuilderConfSetStr(bld, "dfs.blocksize",
                           TO_STR(TLH_DEFAULT_BLOCK_SIZE));
+    hdfsBuilderConfSetStr(bld, "dfs.replication",
+                          TO_STR(TLH_DEFAULT_DFS_REPLICATION));
+    hdfsBuilderConfSetStr(bld, "ipc.client.connect.max.retries",
+                          TO_STR(TLH_DEFAULT_IPC_CLIENT_CONNECT_MAX_RETRIES));
+    hdfsBuilderConfSetStr(bld, "ipc.client.connect.retry.interval",
+                         TO_STR(TLH_DEFAULT_IPC_CLIENT_CONNECT_RETRY_INTERVAL_MS));
     if (username) {
         hdfsBuilderSetUserName(bld, username);
     }
@@ -172,16 +186,20 @@ static int doTestHdfsOperations(struct tlhThreadInfo *ti, hdfsFS fs,
 
     /* TODO: implement writeFully and use it here */
     expected = (int)strlen(paths->prefix);
-    ret = hdfsWrite(fs, file, paths->prefix, expected);
-    if (ret < 0) {
-        ret = errno;
-        fprintf(stderr, "hdfsWrite failed and set errno %d\n", ret);
-        return ret;
-    }
-    if (ret != expected) {
-        fprintf(stderr, "hdfsWrite was supposed to write %d bytes, but "
-                "it wrote %d\n", ret, expected);
-        return EIO;
+    tSize fileSz = 0;
+    while (fileSz < 1024) {
+        ret = hdfsWrite(fs, file, paths->prefix, expected);
+        if (ret < 0) {
+            ret = errno;
+            fprintf(stderr, "hdfsWrite failed and set errno %d\n", ret);
+            return ret;
+        }
+        if (ret != expected) {
+            fprintf(stderr, "hdfsWrite was supposed to write %d bytes, but "
+                    "it wrote %d\n", ret, expected);
+            return EIO;
+        }
+        fileSz += ret;
     }
     EXPECT_ZERO(hdfsFlush(fs, file));
     EXPECT_ZERO(hdfsHSync(fs, file));
@@ -203,22 +221,70 @@ static int doTestHdfsOperations(struct tlhThreadInfo *ti, hdfsFS fs,
     EXPECT_UINT64_EQ(UINT64_C(0), readStats->totalBytesRead);
     EXPECT_UINT64_EQ(UINT64_C(0), readStats->totalLocalBytesRead);
     EXPECT_UINT64_EQ(UINT64_C(0), readStats->totalShortCircuitBytesRead);
-    hdfsFileFreeReadStatistics(readStats);
-    /* TODO: implement readFully and use it here */
-    ret = hdfsRead(fs, file, tmp, sizeof(tmp));
-    if (ret < 0) {
-        ret = errno;
-        fprintf(stderr, "hdfsRead failed and set errno %d\n", ret);
-        return ret;
+    uint64_t readOps, nErrs=0;
+    fprintf(stderr, "testHdfsOperations(threadIdx=%d): starting read loop\n",
+        ti->threadIdx);
+    for (readOps=0; readOps < 1000; ++readOps) {
+        EXPECT_ZERO(hdfsCloseFile(fs, file));
+        file = hdfsOpenFile(fs, paths->file1, O_RDONLY, 0, 0, 0);
+        EXPECT_NONNULL(file);
+        tOffset seekPos = (((double)random()) / RAND_MAX) * (fileSz - expected);
+        seekPos = (seekPos / expected) * expected;
+        ret = hdfsSeek(fs, file, seekPos);
+        if (ret < 0) {
+            ret = errno;
+            fprintf(stderr, "hdfsSeek to %"PRIu64" failed and set"
+                    " errno %d\n", seekPos, ret);
+            ++nErrs;
+            continue;
+        }
+        ret = hdfsRead(fs, file, tmp, expected);
+        if (ret < 0) {
+            ret = errno;
+            fprintf(stderr, "hdfsRead failed and set errno %d\n", ret);
+            ++nErrs;
+            continue;
+        }
+        if (ret != expected) {
+            fprintf(stderr, "hdfsRead was supposed to read %d bytes, but "
+                    "it read %d\n", ret, expected);
+            ++nErrs;
+            continue;
+        }
     }
-    if (ret != expected) {
-        fprintf(stderr, "hdfsRead was supposed to read %d bytes, but "
-                "it read %d\n", ret, expected);
-        return EIO;
-    }
-    EXPECT_ZERO(hdfsFileGetReadStatistics(file, &readStats));
-    errno = 0;
-    EXPECT_UINT64_EQ((uint64_t)expected, readStats->totalBytesRead);
+    fprintf(stderr, "testHdfsOperations(threadIdx=%d): finished read loop\n",
+        ti->threadIdx);
+    EXPECT_ZERO(nErrs);
+    /* for (readOps=0; readOps < 1000; ++readOps) { */
+    /*     EXPECT_ZERO(hdfsCloseFile(fs, file)); */
+    /*     file = hdfsOpenFile(fs, paths->file1, O_RDONLY, 0, 0, 0); */
+    /*     EXPECT_NONNULL(file); */
+    /*     hdfsFileFreeReadStatistics(readStats); */
+    /*     EXPECT_ZERO(hdfsFileClearReadStatistics(file)); */
+    /*     tOffset seekPos = (((double)random()) / RAND_MAX) * (fileSz - expected); */
+    /*     seekPos = (seekPos / expected) * expected; */
+    /*     ret = hdfsSeek(fs, file, seekPos); */
+    /*     if (ret < 0) { */
+    /*         ret = errno; */
+    /*         fprintf(stderr, "hdfsSeek to %"PRIu64" failed and set" */
+    /*                 " errno %d\n", seekPos, ret); */
+    /*         return ret; */
+    /*     } */
+    /*     ret = hdfsRead(fs, file, tmp, expected); */
+    /*     if (ret < 0) { */
+    /*         ret = errno; */
+    /*         fprintf(stderr, "hdfsRead failed and set errno %d\n", ret); */
+    /*         return ret; */
+    /*     } */
+    /*     if (ret != expected) { */
+    /*         fprintf(stderr, "hdfsRead was supposed to read %d bytes, but " */
+    /*                 "it read %d\n", ret, expected); */
+    /*         return EIO; */
+    /*     } */
+    /*     EXPECT_ZERO(hdfsFileGetReadStatistics(file, &readStats)); */
+    /*     errno = 0; */
+    /*     EXPECT_UINT64_EQ((uint64_t)expected, readStats->totalBytesRead); */
+    /* } */
     hdfsFileFreeReadStatistics(readStats);
     EXPECT_ZERO(hdfsFileClearReadStatistics(file));
     EXPECT_ZERO(hdfsFileGetReadStatistics(file, &readStats));
@@ -265,23 +331,29 @@ static int testHdfsOperationsImpl(struct tlhThreadInfo *ti)
 
     fprintf(stderr, "testHdfsOperations(threadIdx=%d): starting\n",
         ti->threadIdx);
-    EXPECT_ZERO(hdfsSingleNameNodeConnect(tlhCluster, &fs, NULL));
-    if (!fs)
-        return 1;
-    EXPECT_ZERO(setupPaths(ti, &paths));
-    // test some operations
-    EXPECT_ZERO(doTestHdfsOperations(ti, fs, &paths));
-    EXPECT_ZERO(hdfsDisconnect(fs));
-    // reconnect as user "foo" and verify that we get permission errors
-    EXPECT_ZERO(hdfsSingleNameNodeConnect(tlhCluster, &fs, "foo"));
-    EXPECT_NEGATIVE_ONE_WITH_ERRNO(hdfsChown(fs, paths.file1, "ha3", NULL), EACCES);
-    EXPECT_ZERO(hdfsDisconnect(fs));
-    // reconnect to do the final delete.
-    EXPECT_ZERO(hdfsSingleNameNodeConnect(tlhCluster, &fs, NULL));
-    if (!fs)
-        return 1;
-    EXPECT_ZERO(hdfsDelete(fs, paths.prefix, 1));
-    EXPECT_ZERO(hdfsDisconnect(fs));
+    if (ti->hdfs) {
+        EXPECT_ZERO(setupPaths(ti, &paths));
+        // test some operations
+        EXPECT_ZERO(doTestHdfsOperations(ti, ti->hdfs, &paths));
+    } else {
+        EXPECT_ZERO(hdfsSingleNameNodeConnect(tlhCluster, &fs, NULL));
+        if (!fs)
+            return 1;
+        EXPECT_ZERO(setupPaths(ti, &paths));
+        // test some operations
+        EXPECT_ZERO(doTestHdfsOperations(ti, fs, &paths));
+        EXPECT_ZERO(hdfsDisconnect(fs));
+    }
+    /* // reconnect as user "foo" and verify that we get permission errors */
+    /* EXPECT_ZERO(hdfsSingleNameNodeConnect(tlhCluster, &fs, "foo")); */
+    /* EXPECT_NEGATIVE_ONE_WITH_ERRNO(hdfsChown(fs, paths.file1, "ha3", NULL), EACCES); */
+    /* EXPECT_ZERO(hdfsDisconnect(fs)); */
+    /* // reconnect to do the final delete. */
+    /* EXPECT_ZERO(hdfsSingleNameNodeConnect(tlhCluster, &fs, NULL)); */
+    /* if (!fs) */
+    /*     return 1; */
+    /* EXPECT_ZERO(hdfsDelete(fs, paths.prefix, 1)); */
+    /* EXPECT_ZERO(hdfsDisconnect(fs)); */
     return 0;
 }
 
@@ -328,10 +400,11 @@ int main(void)
     struct NativeMiniDfsConf conf = {
         1, /* doFormat */
     };
+    conf.numDataNodes = 3;
 
     tlhNumThreadsStr = getenv("TLH_NUM_THREADS");
     if (!tlhNumThreadsStr) {
-        tlhNumThreadsStr = "3";
+        tlhNumThreadsStr = "1024";
     }
     tlhNumThreads = atoi(tlhNumThreadsStr);
     if ((tlhNumThreads <= 0) || (tlhNumThreads > TLH_MAX_THREADS)) {
@@ -349,15 +422,20 @@ int main(void)
     EXPECT_NONNULL(tlhCluster);
     EXPECT_ZERO(nmdWaitClusterUp(tlhCluster));
 
+    hdfsFS hdfs;
+    EXPECT_ZERO(hdfsSingleNameNodeConnect(tlhCluster, &hdfs, NULL));
+
     for (i = 0; i < tlhNumThreads; i++) {
         ti[i].theThread.start = testHdfsOperations;
         ti[i].theThread.arg = &ti[i];
+        ti[i].hdfs = hdfs;
         EXPECT_ZERO(threadCreate(&ti[i].theThread));
     }
     for (i = 0; i < tlhNumThreads; i++) {
         EXPECT_ZERO(threadJoin(&ti[i].theThread));
     }
 
+    EXPECT_ZERO(hdfsDisconnect(hdfs));
     EXPECT_ZERO(nmdShutdown(tlhCluster));
     nmdFree(tlhCluster);
     return checkFailures(ti, tlhNumThreads);

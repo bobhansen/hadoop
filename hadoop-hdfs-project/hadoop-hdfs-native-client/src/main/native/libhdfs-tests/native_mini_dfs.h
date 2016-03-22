@@ -51,6 +51,11 @@ struct NativeMiniDfsConf {
      * Nonzero if we should configure short circuit.
      */
     jboolean configureShortCircuit;
+
+    /**
+     * The number of datanodes in MiniDfsCluster
+     */
+    jint numDataNodes;
 };
 
 /**

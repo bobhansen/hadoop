@@ -81,6 +81,7 @@
 #undef hadoopRzBufferLength
 #undef hadoopRzBufferGet
 #undef hadoopRzBufferFree
+#undef hdfsBuilder
 #undef hdfs_internal
 #undef hdfsFS
 #undef hdfsFile_internal
