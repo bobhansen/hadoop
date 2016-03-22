@@ -207,6 +207,8 @@ void RpcConnection::HandleRpcResponse(std::shared_ptr<Response> response) {
         Status::Exception(h.exceptionclassname().c_str(), h.errormsg().c_str());
   }
 
+  LogMessage(kDebug, kRPC) << "RpcConnection::HandleRpcResponse: status = " << status.ToString();
+
   io_service().post([req, response, status]() {
     req->OnResponseArrived(response->in.get(), status);  // Never call back while holding a lock
   });

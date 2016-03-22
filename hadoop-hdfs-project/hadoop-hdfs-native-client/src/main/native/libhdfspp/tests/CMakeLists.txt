@@ -54,6 +54,17 @@ function(add_memcheck_test name binary)
   endif()
 endfunction(add_memcheck_test)
 
+#This test requires a great deal of Hadoop Java infrastructure to run.
+if(HADOOP_BUILD)
+add_library(hdfspp_test_shim_static STATIC hdfs_shim.c libhdfs_wrapper.c libhdfspp_wrapper.cc ${LIBHDFSPP_BINDING_C}/hdfs.cc)
+
+build_libhdfs_test(libhdfs_threaded hdfspp_test_shim_static expect.c test_libhdfs_threaded.c ${OS_DIR}/thread.c)
+link_libhdfs_test(libhdfs_threaded hdfspp_test_shim_static fs reader rpc proto common connection ${PROTOBUF_LIBRARIES} ${OPENSSL_LIBRARIES} native_mini_dfs ${JAVA_JVM_LIBRARY})
+add_libhdfs_test(libhdfs_threaded hdfspp_test_shim_static)
+
+endif(HADOOP_BUILD)
+
+if (FALSE)
 
 add_executable(uri_test uri_test.cc)
 target_link_libraries(uri_test common gmock_main ${CMAKE_THREAD_LIBS_INIT})
@@ -96,16 +107,6 @@ add_executable(hdfspp_errors_test hdfspp_errors.cc)
 target_link_libraries(hdfspp_errors_test common gmock_main bindings_c fs rpc proto common reader connection ${PROTOBUF_LIBRARIES} ${OPENSSL_LIBRARIES} gmock_main ${CMAKE_THREAD_LIBS_INIT})
 add_memcheck_test(hdfspp_errors hdfspp_errors_test)
 
-#This test requires a great deal of Hadoop Java infrastructure to run.
-if(HADOOP_BUILD)
-add_library(hdfspp_test_shim_static STATIC hdfs_shim.c libhdfs_wrapper.c libhdfspp_wrapper.cc ${LIBHDFSPP_BINDING_C}/hdfs.cc)
-
-build_libhdfs_test(libhdfs_threaded hdfspp_test_shim_static expect.c test_libhdfs_threaded.c ${OS_DIR}/thread.c)
-link_libhdfs_test(libhdfs_threaded hdfspp_test_shim_static fs reader rpc proto common connection ${PROTOBUF_LIBRARIES} ${OPENSSL_LIBRARIES} native_mini_dfs ${JAVA_JVM_LIBRARY})
-add_libhdfs_test(libhdfs_threaded hdfspp_test_shim_static)
-
-endif(HADOOP_BUILD)
-
 add_executable(hdfs_builder_test hdfs_builder_test.cc)
 target_link_libraries(hdfs_builder_test test_common gmock_main bindings_c fs rpc proto common reader connection ${PROTOBUF_LIBRARIES} ${OPENSSL_LIBRARIES} gmock_main ${CMAKE_THREAD_LIBS_INIT})
 add_memcheck_test(hdfs_builder_test hdfs_builder_test)
@@ -113,3 +114,5 @@ add_memcheck_test(hdfs_builder_test hdfs_builder_test)
 add_executable(logging_test logging_test.cc)
 target_link_libraries(logging_test common gmock_main)
 add_memcheck_test(logging_test logging_test)
+
+endif()

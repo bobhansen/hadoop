@@ -50,12 +50,13 @@ enum LogSourceComponent {
   kFileSystem  = 1 << 4,
 };
 
-#define LOG_DEBUG() LogMessage(kDebug)
-#define LOG_INFO() LogMessage(kInfo)
-#define LOG_WARN() LogMessage(kWarning)
-#define LOG_ERROR() LogMessage(kError)
+class LogMessageObj;
 
-class LogMessage;
+#define LogMessage(LEVEL, COMPONENT) (LogMessageObj(LEVEL,COMPONENT) << "[this=" << ((void*)this) << "] ")
+#define LOG_DEBUG() LogMessage(kDebug, kUnknown)
+#define LOG_INFO() LogMessage(kInfo, kUnknown)
+#define LOG_WARN() LogMessage(kWarning, kUnknown)
+#define LOG_ERROR() LogMessage(kError, kUnknown)
 
 class LoggerInterface {
  public:
@@ -73,7 +74,7 @@ class LoggerInterface {
   /**
    *  User defined handling messages, common case would be printing somewhere.
    **/
-  virtual void Write(const LogMessage& msg) = 0;
+  virtual void Write(const LogMessageObj& msg) = 0;
  private:
   /**
    * Derived classes should not access directly.
@@ -87,7 +88,7 @@ class StderrLogger : public LoggerInterface {
  public:
   StderrLogger() : show_timestamp_(true), show_level_(true),
                    show_thread_(true), show_component_(true) {}
-  void Write(const LogMessage& msg);
+  void Write(const LogMessageObj& msg);
   void set_show_timestamp(bool show);
   void set_show_level(bool show);
   void set_show_thread(bool show);
@@ -105,7 +106,7 @@ class CForwardingLogger : public LoggerInterface {
 
   // Converts LogMessage into LogData, a POD type,
   // and invokes callback_ if it's not null.
-  void Write(const LogMessage& msg);
+  void Write(const LogMessageObj& msg);
 
   // pass in NULL to clear the hook
   void SetCallback(void (*callback)(LogData*));
@@ -124,10 +125,10 @@ class CForwardingLogger : public LoggerInterface {
  *  logger implementation.
  **/
 class LogManager {
- friend class LogMessage;
+ friend class LogMessageObj;
  public:
   static bool ShouldLog(LogLevel level, LogSourceComponent source);
-  static void Write(const LogMessage & msg);
+  static void Write(const LogMessageObj & msg);
   static void EnableLogForComponent(LogSourceComponent c);
   static void DisableLogForComponent(LogSourceComponent c);
   static void SetLogLevel(LogLevel level);
@@ -141,17 +142,17 @@ class LogManager {
   static std::unique_ptr<LoggerInterface> logger_impl_;
 };
 
-class LogMessage {
+class LogMessageObj {
  friend class LogManager;
  public:
-  LogMessage(const LogLevel &l, LogSourceComponent component = kUnknown) :
+  LogMessageObj(const LogLevel &l, LogSourceComponent component = kUnknown) :
              worth_reporting_(LogManager::ShouldLog(l,component)),
              level_(l), component_(component) {
     //std::cerr << "msg ctor called, worth_reporting_=" << worth_reporting_
     //          << "level = " << level_string() << ", component=" << component_string() << std::endl;
   }
 
-  ~LogMessage();
+  ~LogMessageObj();
 
   bool is_worth_reporting() const { return worth_reporting_; };
   const char *level_string() const;
@@ -160,20 +161,20 @@ class LogMessage {
   LogSourceComponent component() const {return component_; }
 
   //print as-is, no-op if pointer params are null
-  LogMessage& operator<<(const char *);
-  LogMessage& operator<<(const std::string&);
-  LogMessage& operator<<(const std::string*);
+  LogMessageObj& operator<<(const char *);
+  LogMessageObj& operator<<(const std::string&);
+  LogMessageObj& operator<<(const std::string*);
 
   //convert to a string "true"/"false"
-  LogMessage& operator<<(bool);
+  LogMessageObj& operator<<(bool);
 
-  LogMessage& operator<<(int32_t);
-  LogMessage& operator<<(uint32_t);
-  LogMessage& operator<<(int64_t);
-  LogMessage& operator<<(uint64_t);
+  LogMessageObj& operator<<(int32_t);
+  LogMessageObj& operator<<(uint32_t);
+  LogMessageObj& operator<<(int64_t);
+  LogMessageObj& operator<<(uint64_t);
 
   //print address as hex
-  LogMessage& operator<<(void *);
+  LogMessageObj& operator<<(void *);
 
   std::string MsgString() const;
 

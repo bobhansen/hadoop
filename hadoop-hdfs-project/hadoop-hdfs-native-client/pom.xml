@@ -228,6 +228,10 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
                   <target>
                     <property name="compile_classpath" refid="maven.compile.classpath"/>
                     <property name="test_classpath" refid="maven.test.classpath"/>
+                    <exec executable="bash" failonerror="true" dir="${project.build.directory}/">
+				      <arg line=" -c &quot;echo $CLASSPATH&quot;" />
+                      <env key="CLASSPATH" value="${test_classpath}:${compile_classpath}"/>
+                    </exec>
                     <exec executable="ctest" failonerror="true" dir="${project.build.directory}/">
                       <arg line="--output-on-failure"/>
                       <arg line="${native_ctest_args}"/>

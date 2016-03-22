@@ -59,7 +59,7 @@ bool LogManager::ShouldLog(LogLevel level, LogSourceComponent source) {
   return false;
 }
 
-void LogManager::Write(const LogMessage& msg) {
+void LogManager::Write(const LogMessageObj& msg) {
   GET_IMPL_LOCK
   if(logger_impl_)
     logger_impl_->Write(msg);
@@ -100,7 +100,7 @@ void LoggerInterface::SetLogLevel(LogLevel level) {
 /**
  *  Simple plugin to dump logs to stderr
  **/
-void StderrLogger::Write(const LogMessage& msg) {
+void StderrLogger::Write(const LogMessageObj& msg) {
   if(!msg.is_worth_reporting())
     return;
 
@@ -145,7 +145,7 @@ void StderrLogger::set_show_component(bool show) {
 /**
  *  Plugin to forward message to a C function pointer
  **/
-void CForwardingLogger::Write(const LogMessage& msg) {
+void CForwardingLogger::Write(const LogMessageObj& msg) {
   if(!msg.is_worth_reporting())
     return;
 
@@ -192,31 +192,31 @@ void CForwardingLogger::FreeLogData(LogData *data) {
 }
 
 
-LogMessage::~LogMessage() {
+LogMessageObj::~LogMessageObj() {
   if(worth_reporting_)
     LogManager::Write(*this);
 }
 
-LogMessage& LogMessage::operator<<(const std::string *str) {
+LogMessageObj& LogMessageObj::operator<<(const std::string *str) {
   if(str && worth_reporting_)
     msg_buffer_ << str;
   return *this;
 }
 
-LogMessage& LogMessage::operator<<(const std::string& str) {
+LogMessageObj& LogMessageObj::operator<<(const std::string& str) {
   if(worth_reporting_)
     msg_buffer_ << str;
   return *this;
 }
 
-LogMessage& LogMessage::operator<<(const char *str) {
+LogMessageObj& LogMessageObj::operator<<(const char *str) {
   if(str && worth_reporting_) {
     msg_buffer_ << str;
   }
   return *this;
 }
 
-LogMessage& LogMessage::operator<<(bool val) {
+LogMessageObj& LogMessageObj::operator<<(bool val) {
   if(worth_reporting_) {
     if(val)
       msg_buffer_ << "true";
@@ -226,38 +226,38 @@ LogMessage& LogMessage::operator<<(bool val) {
   return *this;
 }
 
-LogMessage& LogMessage::operator<<(int32_t val) {
+LogMessageObj& LogMessageObj::operator<<(int32_t val) {
   if(worth_reporting_)
     msg_buffer_ << val;
   return *this;
 }
 
-LogMessage& LogMessage::operator<<(uint32_t val) {
+LogMessageObj& LogMessageObj::operator<<(uint32_t val) {
   if(worth_reporting_)
     msg_buffer_ << val;
   return *this;
 }
 
-LogMessage& LogMessage::operator<<(int64_t val) {
+LogMessageObj& LogMessageObj::operator<<(int64_t val) {
   if(worth_reporting_)
     msg_buffer_ << val;
   return *this;
 }
 
-LogMessage& LogMessage::operator<<(uint64_t val) {
+LogMessageObj& LogMessageObj::operator<<(uint64_t val) {
   if(worth_reporting_)
     msg_buffer_ << val;
   return *this;
 }
 
 
-LogMessage& LogMessage::operator<<(void *ptr) {
+LogMessageObj& LogMessageObj::operator<<(void *ptr) {
   if(worth_reporting_)
     msg_buffer_ << ptr;
   return *this;
 }
 
-std::string LogMessage::MsgString() const {
+std::string LogMessageObj::MsgString() const {
   if(worth_reporting_)
     return msg_buffer_.str();
   return "";
@@ -271,7 +271,7 @@ const char * kLevelStrings[5] = {
   "[ERROR ]"
 };
 
-const char * LogMessage::level_string() const {
+const char * LogMessageObj::level_string() const {
   return kLevelStrings[level_];
 }
 
@@ -283,7 +283,7 @@ const char * kComponentStrings[5] = {
   "[FileSystem  ]"
 };
 
-const char * LogMessage::component_string() const {
+const char * LogMessageObj::component_string() const {
   switch(component_) {
     case kRPC: return kComponentStrings[1];
     case kBlockReader: return kComponentStrings[2];
