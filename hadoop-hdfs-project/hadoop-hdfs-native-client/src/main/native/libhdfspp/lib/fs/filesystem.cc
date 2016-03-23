@@ -19,6 +19,7 @@
 #include "filesystem.h"
 #include "common/continuation/asio.h"
 #include "common/util.h"
+#include "common/logging.h"
 
 #include <asio/ip/tcp.hpp>
 
@@ -28,6 +29,8 @@
 #include <tuple>
 #include <iostream>
 #include <pwd.h>
+
+#define FMT_THIS_ADDR "this=" << (void*)this
 
 namespace hdfs {
 
@@ -65,6 +68,10 @@ void NameNodeOperations::GetBlockLocations(const std::string & path,
 {
   using ::hadoop::hdfs::GetBlockLocationsRequestProto;
   using ::hadoop::hdfs::GetBlockLocationsResponseProto;
+
+  LogMessage(kDebug, kFileSystem) << "NameNodeOperations::GetBlockLocations("
+                                  << FMT_THIS_ADDR << ", path=" << path
+                                  << ", ...) called";
 
   struct State {
     GetBlockLocationsRequestProto req;
@@ -158,17 +165,23 @@ FileSystemImpl::FileSystemImpl(IoService *&io_service, const std::string &user_n
       kNamenodeProtocolVersion), client_name_(GetRandomClientName()),
       bad_node_tracker_(std::make_shared<BadDataNodeTracker>())
 {
+  LogMessage(kDebug, kFileSystem) << "FileSystemImpl::FileSystemImpl("
+                                  << FMT_THIS_ADDR << ") called";
+
   // Poor man's move
   io_service = nullptr;
 
   /* spawn background threads for asio delegation */
-  unsigned int threads = 1 /* options.io_threads_, pending HDFS-9117 */;
+  unsigned int threads = 2 /* options.io_threads_, pending HDFS-9117 */;
   for (unsigned int i = 0; i < threads; i++) {
     AddWorkerThread();
   }
 }
 
 FileSystemImpl::~FileSystemImpl() {
+  LogMessage(kDebug, kFileSystem) << "FileSystemImpl::~FileSystemImpl("
+                                  << FMT_THIS_ADDR << ") called";
+
   /**
    * Note: IoService must be stopped before getting rid of worker threads.
    * Once worker threads are joined and deleted the service can be deleted.
@@ -180,6 +193,9 @@ FileSystemImpl::~FileSystemImpl() {
 void FileSystemImpl::Connect(const std::string &server,
                              const std::string &service,
                              const std::function<void(const Status &, FileSystem * fs)> &handler) {
+  LogMessage(kInfo, kFileSystem) << "FileSystemImpl::Connect("
+                                 << FMT_THIS_ADDR << ", server=" << server
+                                 << ", service=" << service << ") called";
   /* IoService::New can return nullptr */
   if (!io_service_) {
     handler (Status::Error("Null IoService"), this);
@@ -191,6 +207,10 @@ void FileSystemImpl::Connect(const std::string &server,
 }
 
 Status FileSystemImpl::Connect(const std::string &server, const std::string &service) {
+  LogMessage(kInfo, kFileSystem) << "FileSystemImpl::[sync]Connect("
+                                 << FMT_THIS_ADDR << ", server=" << server
+                                 << ", service=" << service << ") called";
+
   /* synchronized */
   auto stat = std::make_shared<std::promise<Status>>();
   std::future<Status> future = stat->get_future();
@@ -252,6 +272,10 @@ Status FileSystemImpl::ConnectToDefaultFs() {
 
 
 int FileSystemImpl::AddWorkerThread() {
+  LogMessage(kDebug, kFileSystem) << "FileSystemImpl::AddWorkerThread("
+                                  << FMT_THIS_ADDR <<") called."
+                                  << " Existing thread count = " << worker_threads_.size();
+
   auto service_task = [](IoService *service) { service->Run(); };
   worker_threads_.push_back(
       WorkerPtr(new std::thread(service_task, io_service_.get())));
@@ -261,6 +285,9 @@ int FileSystemImpl::AddWorkerThread() {
 void FileSystemImpl::Open(
     const std::string &path,
     const std::function<void(const Status &, FileHandle *)> &handler) {
+  LogMessage(kInfo, kFileSystem) << "FileSystemImpl::Open("
+                                 << FMT_THIS_ADDR << ", path="
+                                 << path << ") called";
 
   nn_.GetBlockLocations(path, [this, handler](const Status &stat, std::shared_ptr<const struct FileInfo> file_info) {
     handler(stat, stat.ok() ? new FileHandleImpl(&io_service_->io_service(), client_name_, file_info, bad_node_tracker_)
@@ -270,6 +297,10 @@ void FileSystemImpl::Open(
 
 Status FileSystemImpl::Open(const std::string &path,
                                          FileHandle **handle) {
+  LogMessage(kInfo, kFileSystem) << "FileSystemImpl::[sync]Open("
+                                 << FMT_THIS_ADDR << ", path="
+                                 << path << ") called";
+
   auto callstate = std::make_shared<std::promise<std::tuple<Status, FileHandle*>>>();
   std::future<std::tuple<Status, FileHandle*>> future(callstate->get_future());
 
@@ -302,9 +333,9 @@ void FileSystemImpl::WorkerDeleter::operator()(std::thread *t) {
   //     from within one of the worker threads, leading to a deadlock.  Let's
   //     provide some explicit protection.
   if(t->get_id() == std::this_thread::get_id()) {
-    //TODO: When we get good logging support, add it in here
-    std::cerr << "FATAL: Attempted to destroy a thread pool from within a "
-                 "callback of the thread pool.\n";
+    LogMessage(kError, kFileSystem) << "FileSystemImpl::WorkerDeleter::operator(treadptr="
+                                    << t << ") : FATAL: Attempted to destroy a thread pool"
+                                    "from within a callback of the thread pool!";
   }
   t->join();
   delete t;

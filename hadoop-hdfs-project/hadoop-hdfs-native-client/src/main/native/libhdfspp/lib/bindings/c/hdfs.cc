@@ -21,6 +21,7 @@
 #include "fs/filesystem.h"
 #include "common/hdfs_configuration.h"
 #include "common/configuration_loader.h"
+#include "common/logging.h"
 
 #include <hdfs/hdfs.h>
 #include <hdfspp/hdfs_ext.h>
@@ -136,8 +137,10 @@ static int Error(const Status &stat) {
       default_message = "Operation canceled";
       break;
     case Status::Code::kPermissionDenied:
-      errnum = EACCES;
-      default_message = "Permission denied";
+      if (!stat.ToString().empty())
+        ReportError(EACCES, stat.ToString().c_str());
+      else
+        ReportError(EACCES, "Permission denied");
       break;
     default:
       errnum = ENOSYS;
@@ -600,4 +603,55 @@ int hdfsBuilderConfGetInt(struct hdfsBuilder *bld, const char *key, int32_t *val
   } catch (...) {
     return ReportCaughtNonException();
   }
+}
+
+/**
+ * Logging functions
+ **/
+
+LogData *hdfsCopyLogData(LogData *data) {
+  return CForwardingLogger::CopyLogData(data);
+}
+
+void hdfsFreeLogData(LogData *data) {
+  CForwardingLogger::FreeLogData(data);
+}
+
+void hdfsSetLogFunction(void (*callback)(LogData*)) {
+  CForwardingLogger *logger = new CForwardingLogger();
+  logger->SetCallback(callback);
+  LogManager::SetLoggerImplementation(std::unique_ptr<LoggerInterface>(logger));
+}
+
+static bool IsLevelValid(int component) {
+  if(component < HDFSPP_LOG_LEVEL_TRACE || component > HDFSPP_LOG_LEVEL_ERROR)
+    return false;
+  return true;
+}
+
+static bool IsComponentValid(int level) {
+  if(level < HDFSPP_LOG_COMPONENT_UNKNOWN || level > HDFSPP_LOG_COMPONENT_FILESYSTEM)
+    return false;
+  return true;
+}
+
+int hdfsEnableLoggingForComponent(int component) {
+  if(!IsComponentValid(component))
+    return 1;
+  LogManager::EnableLogForComponent(static_cast<LogSourceComponent>(component));
+  return 0;
+}
+
+int hdfsDisableLoggingForComponent(int component) {
+  if(!IsComponentValid(component))
+    return 1;
+  LogManager::DisableLogForComponent(static_cast<LogSourceComponent>(component));
+  return 0;
+}
+
+int hdfsSetLoggingLevel(int level) {
+  if(!IsLevelValid(level))
+    return 1;
+  LogManager::SetLogLevel(static_cast<LogLevel>(level));
+  return 0;
 }

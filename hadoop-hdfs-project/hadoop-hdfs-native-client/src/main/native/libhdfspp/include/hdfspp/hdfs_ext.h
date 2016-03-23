@@ -95,20 +95,98 @@ struct hdfsBuilder *hdfsNewBuilderFromDirectory(const char * configDirectory);
  * @return         0 on success; nonzero error code otherwise.
  *                 Failure to find the key is not an error.
  */
+LIBHDFS_EXTERNAL
 int hdfsBuilderConfGetStr(struct hdfsBuilder *bld, const char *key,
                           char **val);
 
-    /**
-     * Get a configuration integer from the settings currently read into the builder.
-     *
-     * @param key      The key to find
-     * @param val      (out param) The value.  This will NOT be changed if the
-     *                 key isn't found.
-     *
-     * @return         0 on success; nonzero error code otherwise.
-     *                 Failure to find the key is not an error.
-     */
+/**
+ * Get a configuration integer from the settings currently read into the builder.
+ *
+ * @param key      The key to find
+ * @param val      (out param) The value.  This will NOT be changed if the
+ *                 key isn't found.
+ *
+ * @return         0 on success; nonzero error code otherwise.
+ *                 Failure to find the key is not an error.
+ */
+LIBHDFS_EXTERNAL
 int hdfsBuilderConfGetInt(struct hdfsBuilder *bld, const char *key, int32_t *val);
+
+/**
+ *  Logging infrastructure for C clients.
+ **/
+
+/* logging levels, as defined in enum in lib/common/logging.cc */
+#define HDFSPP_LOG_LEVEL_TRACE 0
+#define HDFSPP_LOG_LEVEL_DEBUG 1
+#define HDFSPP_LOG_LEVEL_INFO  2
+#define HDFSPP_LOG_LEVEL_WARN  3
+#define HDFSPP_LOG_LEVEL_ERROR 4
+
+/* components emitting messages, as defined in lib/common/logging.cc */
+#define HDFSPP_LOG_COMPONENT_UNKNOWN      1 << 0
+#define HDFSPP_LOG_COMPONENT_RPC          1 << 1
+#define HDFSPP_LOG_COMPONENT_BLOCKREADER  1 << 2
+#define HDFSPP_LOG_COMPONENT_FILEHANDLE   1 << 3
+#define HDFSPP_LOG_COMPONENT_FILESYSTEM   1 << 4
+
+/**
+ *  POD struct for C to consume (C++ interface gets to take advantage of RAII)
+ **/
+typedef struct {
+  // callee can figure out thread id and time if it needs it
+  const char *msg;
+  int level;
+  int component;
+} LogData;
+
+/**
+ *  Client can supply a C style function pointer to be invoked any time something
+ *  is logged.  Unlike the C++ logger this will not filter by level or component,
+ *  it is up to the consumer to throw away messages they don't want.
+ *
+ *  Note: The callback provided must be reentrant, the library does not guarentee
+ *  that there won't be concurrent calls.
+ *  Note: Callback does not own the LogData struct.  If the client would like to
+ *  keep one around use hdfsCopyLogData/hdfsFreeLogData.
+ **/
+LIBHDFS_EXTERNAL
+void hdfsSetLogFunction(void (*hook)(LogData*));
+
+/**
+ *  Create a copy of the LogData object passed in and return a pointer to it.
+ *  Returns null if it was unable to copy/
+ **/
+LIBHDFS_EXTERNAL
+LogData *hdfsCopyLogData(const LogData*);
+
+/**
+ *  Client must call this to dispose of the LogData created by hdfsCopyLogData.
+ **/
+LIBHDFS_EXTERNAL
+void hdfsFreeLogData(LogData*);
+
+/**
+ * Enable loggind functionality for a component.
+ * Return 1 on failure, 0 otherwise.
+ **/
+LIBHDFS_EXTERNAL
+int hdfsEnableLoggingForComponent(int component);
+
+/**
+ * Disable logging functionality for a component.
+ * Return 1 on failure, 0 otherwise.
+ **/
+LIBHDFS_EXTERNAL
+int hdfsDisableLoggingForComponent(int component);
+
+/**
+ * Set level between trace and error.
+ * Return 1 on failure, 0 otherwise.
+ **/
+LIBHDFS_EXTERNAL
+int hdfsSetLoggingLevel(int component);
+
 
 #ifdef __cplusplus
 } /* end extern "C" */
