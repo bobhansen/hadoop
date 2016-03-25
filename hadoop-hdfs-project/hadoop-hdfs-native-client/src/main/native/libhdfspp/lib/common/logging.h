@@ -19,7 +19,7 @@
 #ifndef LIB_COMMON_LOGGING_H_
 #define LIB_COMMON_LOGGING_H_
 
-#include "hdfspp/hdfs_ext.h"
+#include "hdfspp/log.h"
 
 #include <iostream>
 #include <sstream>
@@ -31,7 +31,9 @@ namespace hdfs {
 /**
  *  Logging mechanism to provide lightweight logging to stderr as well as
  *  as a callback mechanism to allow C clients and larger third party libs
- *  to be used to handle logging.
+ *  to be used to handle logging.  When adding a new log message to the
+ *  library use the macros defined below (LOG_TRACE..LOG_ERROR) rather than
+ *  using the LogMessage and LogManager objects directly.
  **/
 
 enum LogLevel {
@@ -50,43 +52,55 @@ enum LogSourceComponent {
   kFileSystem  = 1 << 4,
 };
 
-#define LOG_DEBUG() LogMessage(kDebug)
-#define LOG_INFO() LogMessage(kInfo)
-#define LOG_WARN() LogMessage(kWarning)
-#define LOG_ERROR() LogMessage(kError)
+#define LOG_TRACE(C, MSG) do { \
+if(LogManager::ShouldLog(kTrace,C)) { \
+  LogMessage(kTrace, __FILE__, __LINE__, C) MSG; \
+}} while (0);
+
+
+#define LOG_DEBUG(C, MSG) do { \
+if(LogManager::ShouldLog(kDebug,C)) { \
+  LogMessage(kDebug, __FILE__, __LINE__, C) MSG; \
+}} while (0);
+
+#define LOG_INFO(C, MSG) do { \
+if(LogManager::ShouldLog(kInfo,C)) { \
+  LogMessage(kInfo, __FILE__, __LINE__, C) MSG; \
+}} while (0);
+
+#define LOG_WARN(C, MSG) do { \
+if(LogManager::ShouldLog(kWarning,C)) { \
+  LogMessage(kWarning, __FILE__, __LINE__, C) MSG; \
+}} while (0);
+
+#define LOG_ERROR(C, MSG) do { \
+if(LogManager::ShouldLog(kError,C)) { \
+  LogMessage(kError, __FILE__, __LINE__, C) MSG; \
+}} while (0);
+
 
 class LogMessage;
 
 class LoggerInterface {
  public:
-  LoggerInterface() : component_mask_(0xFFFFFFFF), level_threshold_(kTrace) {};
+  LoggerInterface() {};
   virtual ~LoggerInterface() {};
-  /**
-   *  Allow log manager to determine if something is worth logging.
-   *  Don't want these to be virtual for performance reasons.
-   **/
-  bool ShouldLog(LogLevel level, LogSourceComponent component);
-  void EnableLoggingForComponent(LogSourceComponent c);
-  void DisableLoggingForComponent(LogSourceComponent c);
-  void SetLogLevel(LogLevel level);
 
   /**
    *  User defined handling messages, common case would be printing somewhere.
    **/
   virtual void Write(const LogMessage& msg) = 0;
- private:
-  /**
-   * Derived classes should not access directly.
-   **/
-  uint32_t component_mask_;
-  uint32_t level_threshold_;
 };
 
-
+/**
+ *  StderrLogger unsuprisingly dumps messages to stderr.
+ *  This is the default logger if nothing else is explicitly set.
+ **/
 class StderrLogger : public LoggerInterface {
  public:
   StderrLogger() : show_timestamp_(true), show_level_(true),
-                   show_thread_(true), show_component_(true) {}
+                   show_thread_(true), show_component_(true),
+                   show_file_(true) {}
   void Write(const LogMessage& msg);
   void set_show_timestamp(bool show);
   void set_show_level(bool show);
@@ -97,25 +111,7 @@ class StderrLogger : public LoggerInterface {
   bool show_level_;
   bool show_thread_;
   bool show_component_;
-};
-
-class CForwardingLogger : public LoggerInterface {
- public:
-  CForwardingLogger() : callback_(nullptr) {};
-
-  // Converts LogMessage into LogData, a POD type,
-  // and invokes callback_ if it's not null.
-  void Write(const LogMessage& msg);
-
-  // pass in NULL to clear the hook
-  void SetCallback(void (*callback)(LogData*));
-
-  //return a copy, or null on failure.
-  static LogData *CopyLogData(const LogData*);
-  //free LogData allocated with CopyLogData
-  static void FreeLogData(LogData*);
- private:
-  void (*callback_)(LogData*);
+  bool show_file_;
 };
 
 
@@ -126,7 +122,15 @@ class CForwardingLogger : public LoggerInterface {
 class LogManager {
  friend class LogMessage;
  public:
-  static bool ShouldLog(LogLevel level, LogSourceComponent source);
+  //  allow easy inlining
+  static bool ShouldLog(LogLevel level, LogSourceComponent source) {
+    std::lock_guard<std::mutex> impl_lock(impl_lock_);
+    if(level < level_threshold_)
+      return false;
+    if(!(source & component_mask_))
+      return false;
+    return true;
+  }
   static void Write(const LogMessage & msg);
   static void EnableLogForComponent(LogSourceComponent c);
   static void DisableLogForComponent(LogSourceComponent c);
@@ -139,30 +143,39 @@ class LogManager {
   // synchronize all unsafe plugin calls
   static std::mutex impl_lock_;
   static std::unique_ptr<LoggerInterface> logger_impl_;
+  // component and level masking
+  static uint32_t component_mask_;
+  static uint32_t level_threshold_;
 };
 
+/**
+ *  LogMessage contains message text, along with other metadata about the message.
+ *  Note:  For performance reasons a set of macros (see top of file) is used to
+ *  create these inside of an if block.  Do not instantiate these directly, doing
+ *  so will cause the message to be uncontitionally logged.  This minor inconvinience
+ *  gives us a ~20% performance increase in the (common) case where few messages
+ *  are worth logging; std::stringstream is expensive to construct.
+ **/
 class LogMessage {
  friend class LogManager;
  public:
-  LogMessage(const LogLevel &l, LogSourceComponent component = kUnknown) :
-             worth_reporting_(LogManager::ShouldLog(l,component)),
-             level_(l), component_(component) {
-    //std::cerr << "msg ctor called, worth_reporting_=" << worth_reporting_
-    //          << "level = " << level_string() << ", component=" << component_string() << std::endl;
-  }
+  LogMessage(const LogLevel &l, const char *file, int line,
+             LogSourceComponent component = kUnknown) :
+             level_(l), component_(component), origin_file_(file), origin_line_(line){}
 
   ~LogMessage();
 
-  bool is_worth_reporting() const { return worth_reporting_; };
   const char *level_string() const;
   const char *component_string() const;
   LogLevel level() const {return level_; }
   LogSourceComponent component() const {return component_; }
+  int file_line() const {return origin_line_; }
+  const char * file_name() const {return origin_file_; }
 
-  //print as-is, no-op if pointer params are null
+  //print as-is, indicates when a nullptr was passed in
   LogMessage& operator<<(const char *);
-  LogMessage& operator<<(const std::string&);
   LogMessage& operator<<(const std::string*);
+  LogMessage& operator<<(const std::string&);
 
   //convert to a string "true"/"false"
   LogMessage& operator<<(bool);
@@ -178,10 +191,10 @@ class LogMessage {
   std::string MsgString() const;
 
  private:
-  // true if level/component settings say this msg should be printed
-  const bool worth_reporting_;
   LogLevel level_;
   LogSourceComponent component_;
+  const char *origin_file_;
+  const int origin_line_;
   std::stringstream msg_buffer_;
 };
 

@@ -18,6 +18,8 @@
 #ifndef LIBHDFSPP_HDFS_HDFSEXT
 #define LIBHDFSPP_HDFS_HDFSEXT
 
+#include <hdfspp/log.h>
+
 /* get typdefs and #defines from libhdfs' hdfs.h to stay consistent */
 #include <hdfs/hdfs.h>
 
@@ -112,33 +114,6 @@ int hdfsBuilderConfGetStr(struct hdfsBuilder *bld, const char *key,
 LIBHDFS_EXTERNAL
 int hdfsBuilderConfGetInt(struct hdfsBuilder *bld, const char *key, int32_t *val);
 
-/**
- *  Logging infrastructure for C clients.
- **/
-
-/* logging levels, as defined in enum in lib/common/logging.cc */
-#define HDFSPP_LOG_LEVEL_TRACE 0
-#define HDFSPP_LOG_LEVEL_DEBUG 1
-#define HDFSPP_LOG_LEVEL_INFO  2
-#define HDFSPP_LOG_LEVEL_WARN  3
-#define HDFSPP_LOG_LEVEL_ERROR 4
-
-/* components emitting messages, as defined in lib/common/logging.cc */
-#define HDFSPP_LOG_COMPONENT_UNKNOWN      1 << 0
-#define HDFSPP_LOG_COMPONENT_RPC          1 << 1
-#define HDFSPP_LOG_COMPONENT_BLOCKREADER  1 << 2
-#define HDFSPP_LOG_COMPONENT_FILEHANDLE   1 << 3
-#define HDFSPP_LOG_COMPONENT_FILESYSTEM   1 << 4
-
-/**
- *  POD struct for C to consume (C++ interface gets to take advantage of RAII)
- **/
-typedef struct {
-  // callee can figure out thread id and time if it needs it
-  const char *msg;
-  int level;
-  int component;
-} LogData;
 
 /**
  *  Client can supply a C style function pointer to be invoked any time something
@@ -186,6 +161,61 @@ int hdfsDisableLoggingForComponent(int component);
  **/
 LIBHDFS_EXTERNAL
 int hdfsSetLoggingLevel(int component);
+
+/*
+ * Supported event names.  These names will stay consistent in libhdfs callbacks.
+ *
+ * Other events not listed here may be seen, but they are not stable and
+ * should not be counted on.
+ */
+extern const char * FS_NN_CONNECT_EVENT;
+extern const char * FS_NN_READ_EVENT;
+extern const char * FS_NN_WRITE_EVENT;
+
+extern const char * FILE_DN_CONNECT_EVENT;
+extern const char * FILE_DN_READ_EVENT;
+extern const char * FILE_DN_WRITE_EVENT;
+
+
+#define LIBHDFSPP_EVENT_OK (0)
+#ifndef NDEBUG
+  #define DEBUG_SIMULATE_ERROR (-1)
+#endif
+
+typedef int (*libhdfspp_fs_event_callback)(const char * event, const char * cluster,
+                                           int64_t value, int64_t cookie);
+typedef int (*libhdfspp_file_event_callback)(const char * event,
+                                             const char * cluster,
+                                             const char * file,
+                                             int64_t value, int64_t cookie);
+
+/**
+ * Registers a callback for the next filesystem connect operation the current
+ * thread executes.
+ *
+ *  @param handler A function pointer.  Taken as a void* and internally
+ *                 cast into the appropriate type.
+ *  @param cookie  An opaque value that will be passed into the handler; can
+ *                 be used to correlate the handler with some object in the
+ *                 consumer's space.
+ **/
+LIBHDFS_EXTERNAL
+int hdfsPreAttachFSMonitor(libhdfspp_fs_event_callback handler, int64_t cookie);
+
+
+/**
+ * Registers a callback for the next file open operation the current thread
+ * executes.
+ *
+ *  @param fs      The filesystem
+ *  @param handler A function pointer.  Taken as a void* and internally
+ *                 cast into the appropriate type.
+ *  @param cookie  An opaque value that will be passed into the handler; can
+ *                 be used to correlate the handler with some object in the
+ *                 consumer's space.
+ **/
+LIBHDFS_EXTERNAL
+int hdfsPreAttachFileMonitor(libhdfspp_file_event_callback handler, int64_t cookie);
 
 
 #ifdef __cplusplus

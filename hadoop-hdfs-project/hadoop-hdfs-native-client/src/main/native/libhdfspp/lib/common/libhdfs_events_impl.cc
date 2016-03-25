@@ -16,32 +16,36 @@
  * limitations under the License.
  */
 
-#include "hdfs_public_api.h"
-
-#include "common/logging.h"
+#include "libhdfs_events_impl.h"
 
 namespace hdfs {
 
-IoService::~IoService() {}
+/**
+ * Default no-op callback implementations
+ **/
 
-IoService *IoService::New() { return new IoServiceImpl(); }
+LibhdfsEvents::LibhdfsEvents() : fs_callback(std::experimental::nullopt),
+                                 file_callback(std::experimental::nullopt)
+{}
 
-void IoServiceImpl::Run() {
-  // As recommended in http://www.boost.org/doc/libs/1_39_0/doc/html/boost_asio/reference/io_service.html#boost_asio.reference.io_service.effect_of_exceptions_thrown_from_handlers
-  asio::io_service::work work(io_service_);
-  for(;;)
-  {
-    try
-    {
-      io_service_.run();
-      break;
-    } catch (const std::exception & e) {
-      LOG_WARN(kFileSystem, << "Unexpected exception in libhdfspp worker thread: " << e.what());
-    } catch (...) {
-      LOG_WARN(kFileSystem, << "Unexpected value not derived from std::exception in libhdfspp worker thread");
-    }
-  }
+LibhdfsEvents::~LibhdfsEvents() {}
+
+void LibhdfsEvents::set_fs_callback(const fs_event_callback & callback) {
+  fs_callback = callback;
 }
+
+void LibhdfsEvents::set_file_callback(const file_event_callback & callback) {
+  file_callback = callback;
+}
+
+void LibhdfsEvents::clear_fs_callback() {
+  fs_callback = std::experimental::nullopt;
+}
+
+void LibhdfsEvents::clear_file_callback() {
+  file_callback = std::experimental::nullopt;
+}
+
 
 
 }

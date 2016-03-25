@@ -115,5 +115,5 @@ target_link_libraries(hdfs_builder_test test_common gmock_main bindings_c fs rpc
 add_memcheck_test(hdfs_builder_test hdfs_builder_test)
 
 add_executable(logging_test logging_test.cc)
-target_link_libraries(logging_test common gmock_main)
+target_link_libraries(logging_test common gmock_main bindings_c fs rpc proto common reader connection ${PROTOBUF_LIBRARIES} ${OPENSSL_LIBRARIES} gmock_main ${CMAKE_THREAD_LIBS_INIT})
 add_memcheck_test(logging_test logging_test)

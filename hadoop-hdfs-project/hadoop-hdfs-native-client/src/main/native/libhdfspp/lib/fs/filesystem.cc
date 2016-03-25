@@ -47,7 +47,8 @@ static constexpr uint16_t kDefaultPort = 8020;
  *                    NAMENODE OPERATIONS
  ****************************************************************************/
 
-void NameNodeOperations::Connect(const std::string &server,
+void NameNodeOperations::Connect(const std::string &cluster_name,
+                                 const std::string &server,
                              const std::string &service,
                              std::function<void(const Status &)> &&handler) {
   using namespace asio_continuation;
@@ -55,8 +56,8 @@ void NameNodeOperations::Connect(const std::string &server,
   auto m = Pipeline<State>::Create();
   m->Push(Resolve(io_service_, server, service,
                   std::back_inserter(m->state())))
-      .Push(Bind([this, m](const Continuation::Next &next) {
-        engine_.Connect(m->state(), next);
+      .Push(Bind([this, m, cluster_name](const Continuation::Next &next) {
+        engine_.Connect(cluster_name, m->state(), next);
       }));
   m->Run([this, handler](const Status &status, const State &) {
     handler(status);
@@ -69,9 +70,8 @@ void NameNodeOperations::GetBlockLocations(const std::string & path,
   using ::hadoop::hdfs::GetBlockLocationsRequestProto;
   using ::hadoop::hdfs::GetBlockLocationsResponseProto;
 
-  LogMessage(kDebug, kFileSystem) << "NameNodeOperations::GetBlockLocations("
-                                  << FMT_THIS_ADDR << ", path=" << path
-                                  << ", ...) called";
+  LOG_TRACE(kFileSystem, << "NameNodeOperations::GetBlockLocations("
+                         << FMT_THIS_ADDR << ", path=" << path << ", ...) called");
 
   struct State {
     GetBlockLocationsRequestProto req;
@@ -113,6 +113,10 @@ void NameNodeOperations::GetBlockLocations(const std::string & path,
   });
 }
 
+
+void NameNodeOperations::SetFsEventCallback(fs_event_callback callback) {
+  engine_.SetFsEventCallback(callback);
+}
 
 /*****************************************************************************
  *                    FILESYSTEM BASE CLASS
@@ -163,10 +167,11 @@ FileSystemImpl::FileSystemImpl(IoService *&io_service, const std::string &user_n
       nn_(&io_service_->io_service(), options,
       GetRandomClientName(), get_effective_user_name(user_name), kNamenodeProtocol,
       kNamenodeProtocolVersion), client_name_(GetRandomClientName()),
-      bad_node_tracker_(std::make_shared<BadDataNodeTracker>())
+      bad_node_tracker_(std::make_shared<BadDataNodeTracker>()),
+      event_handlers_(std::make_shared<LibhdfsEvents>())
 {
-  LogMessage(kDebug, kFileSystem) << "FileSystemImpl::FileSystemImpl("
-                                  << FMT_THIS_ADDR << ") called";
+  LOG_TRACE(kFileSystem, << "FileSystemImpl::FileSystemImpl("
+                         << FMT_THIS_ADDR << ") called");
 
   // Poor man's move
   io_service = nullptr;
@@ -179,8 +184,8 @@ FileSystemImpl::FileSystemImpl(IoService *&io_service, const std::string &user_n
 }
 
 FileSystemImpl::~FileSystemImpl() {
-  LogMessage(kDebug, kFileSystem) << "FileSystemImpl::~FileSystemImpl("
-                                  << FMT_THIS_ADDR << ") called";
+  LOG_TRACE(kFileSystem, << "FileSystemImpl::~FileSystemImpl("
+                         << FMT_THIS_ADDR << ") called");
 
   /**
    * Note: IoService must be stopped before getting rid of worker threads.
@@ -193,23 +198,25 @@ FileSystemImpl::~FileSystemImpl() {
 void FileSystemImpl::Connect(const std::string &server,
                              const std::string &service,
                              const std::function<void(const Status &, FileSystem * fs)> &handler) {
-  LogMessage(kInfo, kFileSystem) << "FileSystemImpl::Connect("
-                                 << FMT_THIS_ADDR << ", server=" << server
-                                 << ", service=" << service << ") called";
+  LOG_INFO(kFileSystem, << "FileSystemImpl::Connect(" << FMT_THIS_ADDR
+                        << ", server=" << server << ", service="
+                        << service << ") called");
+
   /* IoService::New can return nullptr */
   if (!io_service_) {
     handler (Status::Error("Null IoService"), this);
   }
 
-  nn_.Connect(server, service, [this, handler](const Status & s) {
+  cluster_name_ = server + ":" + service;
+
+  nn_.Connect(cluster_name_, server, service, [this, handler](const Status & s) {
     handler(s, this);
   });
 }
 
 Status FileSystemImpl::Connect(const std::string &server, const std::string &service) {
-  LogMessage(kInfo, kFileSystem) << "FileSystemImpl::[sync]Connect("
-                                 << FMT_THIS_ADDR << ", server=" << server
-                                 << ", service=" << service << ") called";
+  LOG_INFO(kFileSystem, << "FileSystemImpl::[sync]Connect(" << FMT_THIS_ADDR
+                        << ", server=" << server << ", service=" << service << ") called");
 
   /* synchronized */
   auto stat = std::make_shared<std::promise<Status>>();
@@ -272,9 +279,9 @@ Status FileSystemImpl::ConnectToDefaultFs() {
 
 
 int FileSystemImpl::AddWorkerThread() {
-  LogMessage(kDebug, kFileSystem) << "FileSystemImpl::AddWorkerThread("
-                                  << FMT_THIS_ADDR <<") called."
-                                  << " Existing thread count = " << worker_threads_.size();
+  LOG_DEBUG(kFileSystem, << "FileSystemImpl::AddWorkerThread("
+                                  << FMT_THIS_ADDR << ") called."
+                                  << " Existing thread count = " << worker_threads_.size());
 
   auto service_task = [](IoService *service) { service->Run(); };
   worker_threads_.push_back(
@@ -285,21 +292,21 @@ int FileSystemImpl::AddWorkerThread() {
 void FileSystemImpl::Open(
     const std::string &path,
     const std::function<void(const Status &, FileHandle *)> &handler) {
-  LogMessage(kInfo, kFileSystem) << "FileSystemImpl::Open("
+  LOG_INFO(kFileSystem, << "FileSystemImpl::Open("
                                  << FMT_THIS_ADDR << ", path="
-                                 << path << ") called";
+                                 << path << ") called");
 
-  nn_.GetBlockLocations(path, [this, handler](const Status &stat, std::shared_ptr<const struct FileInfo> file_info) {
-    handler(stat, stat.ok() ? new FileHandleImpl(&io_service_->io_service(), client_name_, file_info, bad_node_tracker_)
+  nn_.GetBlockLocations(path, [this, path, handler](const Status &stat, std::shared_ptr<const struct FileInfo> file_info) {
+    handler(stat, stat.ok() ? new FileHandleImpl(cluster_name_, path, &io_service_->io_service(), client_name_, file_info, bad_node_tracker_, event_handlers_)
                             : nullptr);
   });
 }
 
 Status FileSystemImpl::Open(const std::string &path,
                                          FileHandle **handle) {
-  LogMessage(kInfo, kFileSystem) << "FileSystemImpl::[sync]Open("
+  LOG_INFO(kFileSystem, << "FileSystemImpl::[sync]Open("
                                  << FMT_THIS_ADDR << ", path="
-                                 << path << ") called";
+                                 << path << ") called");
 
   auto callstate = std::make_shared<std::promise<std::tuple<Status, FileHandle*>>>();
   std::future<std::tuple<Status, FileHandle*>> future(callstate->get_future());
@@ -333,12 +340,26 @@ void FileSystemImpl::WorkerDeleter::operator()(std::thread *t) {
   //     from within one of the worker threads, leading to a deadlock.  Let's
   //     provide some explicit protection.
   if(t->get_id() == std::this_thread::get_id()) {
-    LogMessage(kError, kFileSystem) << "FileSystemImpl::WorkerDeleter::operator(treadptr="
-                                    << t << ") : FATAL: Attempted to destroy a thread pool"
-                                    "from within a callback of the thread pool!";
+    LOG_ERROR(kFileSystem, << "FileSystemImpl::WorkerDeleter::operator(treadptr="
+                           << t << ") : FATAL: Attempted to destroy a thread pool"
+                           "from within a callback of the thread pool!");
   }
   t->join();
   delete t;
+}
+
+
+void FileSystemImpl::SetFsEventCallback(fs_event_callback callback) {
+  if (event_handlers_) {
+    event_handlers_->set_fs_callback(callback);
+    nn_.SetFsEventCallback(callback);
+  }
+}
+
+
+
+std::shared_ptr<LibhdfsEvents> FileSystemImpl::get_event_handlers() {
+  return event_handlers_;
 }
 
 }

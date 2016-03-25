@@ -185,7 +185,7 @@ void RpcConnection::AsyncFlushPendingRequests() {
 void RpcConnection::HandleRpcResponse(std::shared_ptr<Response> response) {
   assert(lock_held(connection_state_lock_));  // Must be holding lock before calling
 
-  LogMessage(kDebug, kRPC) << "RpcConnection::HandleRpcResponse";
+  LOG_TRACE(kRPC, << "RpcConnection::HandleRpcResponse");
 
   response->ar.reset(new pbio::ArrayInputStream(&response->data_[0], response->data_.size()));
   response->in.reset(new pbio::CodedInputStream(response->ar.get()));
@@ -195,7 +195,7 @@ void RpcConnection::HandleRpcResponse(std::shared_ptr<Response> response) {
 
   auto req = RemoveFromRunningQueue(h.callid());
   if (!req) {
-    LOG_WARN() << "RPC response with Unknown call id " << h.callid();
+    LOG_WARN(kRPC, << "RPC response with Unknown call id " << h.callid());
     return;
   }
 
@@ -342,6 +342,16 @@ void RpcConnection::PreEnqueueRequests(
   pending_requests_.insert(pending_requests_.end(), requests.begin(),
                            requests.end());
   // Don't start sending yet; will flush when connected
+}
+
+void RpcConnection::SetEventHandlers(std::shared_ptr<LibhdfsEvents> event_handlers) {
+  std::lock_guard<std::mutex> state_lock(connection_state_lock_);
+  event_handlers_ = event_handlers;
+}
+
+void RpcConnection::SetClusterName(std::string cluster_name) {
+  std::lock_guard<std::mutex> state_lock(connection_state_lock_);
+  cluster_name_ = cluster_name;
 }
 
 void RpcConnection::CommsError(const Status &status) {

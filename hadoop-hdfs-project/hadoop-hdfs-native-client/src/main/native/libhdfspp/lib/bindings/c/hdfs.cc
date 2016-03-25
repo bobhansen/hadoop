@@ -30,9 +30,11 @@
 #include <cstring>
 #include <iostream>
 #include <algorithm>
+#include <functional>
 
 using namespace hdfs;
 using std::experimental::nullopt;
+using namespace std::placeholders;
 
 static constexpr tPort kDefaultPort = 8020;
 
@@ -80,6 +82,10 @@ void hdfsGetLastError(char *buf, int len) {
   /* stick in null */
   buf[copylen] = 0;
 }
+
+/* Event callbacks for next open calls */
+thread_local std::experimental::optional<fs_event_callback> fsEventCallback;
+thread_local std::experimental::optional<file_event_callback> fileEventCallback;
 
 struct hdfsBuilder {
   hdfsBuilder();
@@ -197,6 +203,10 @@ hdfsFS doHdfsConnect(optional<std::string> nn, optional<tPort> port, optional<st
     if (!fs) {
       ReportError(ENODEV, "Could not create FileSystem object");
       return nullptr;
+    }
+
+    if (fsEventCallback) {
+      fs->SetFsEventCallback(fsEventCallback.value());
     }
 
     Status status;
@@ -399,6 +409,72 @@ int hdfsCancel(hdfsFS fs, hdfsFile file) {
   } catch (...) {
     return ReportCaughtNonException();
   }
+}
+
+
+/*******************************************************************
+ *                EVENT CALLBACKS
+ *******************************************************************/
+
+const char * FS_NN_CONNECT_EVENT = hdfs::FS_NN_CONNECT_EVENT;
+const char * FS_NN_READ_EVENT = hdfs::FS_NN_READ_EVENT;
+const char * FS_NN_WRITE_EVENT = hdfs::FS_NN_WRITE_EVENT;
+
+const char * FILE_DN_CONNECT_EVENT = hdfs::FILE_DN_CONNECT_EVENT;
+const char * FILE_DN_READ_EVENT = hdfs::FILE_DN_READ_EVENT;
+const char * FILE_DN_WRITE_EVENT = hdfs::FILE_DN_WRITE_EVENT;
+
+
+event_response fs_callback_glue(libhdfspp_fs_event_callback handler,
+                      int64_t cookie,
+                      const char * event,
+                      const char * cluster,
+                      int64_t value) {
+  int result = handler(event, cluster, value, cookie);
+  if (result == LIBHDFSPP_EVENT_OK) {
+    return event_response::ok();
+  }
+#ifndef NDEBUG
+  if (result == DEBUG_SIMULATE_ERROR) {
+    return event_response::test_err(Status::Error("Simulated error"));
+  }
+#endif
+
+  return event_response::ok();
+}
+
+event_response file_callback_glue(libhdfspp_file_event_callback handler,
+                      int64_t cookie,
+                      const char * event,
+                      const char * cluster,
+                      const char * file,
+                      int64_t value) {
+  int result = handler(event, cluster, file, value, cookie);
+  if (result == LIBHDFSPP_EVENT_OK) {
+    return event_response::ok();
+  }
+#ifndef NDEBUG
+  if (result == DEBUG_SIMULATE_ERROR) {
+    return event_response::test_err(Status::Error("Simulated error"));
+  }
+#endif
+
+  return event_response::ok();
+}
+
+int hdfsPreAttachFSMonitor(libhdfspp_fs_event_callback handler, int64_t cookie)
+{
+  fs_event_callback callback = std::bind(fs_callback_glue, handler, cookie, _1, _2, _3);
+  fsEventCallback = callback;
+  return 0;
+}
+
+
+int hdfsPreAttachFileMonitor(libhdfspp_file_event_callback handler, int64_t cookie)
+{
+  file_event_callback callback = std::bind(file_callback_glue, handler, cookie, _1, _2, _3, _4);
+  fileEventCallback = callback;
+  return 0;
 }
 
 /*******************************************************************
@@ -608,6 +684,75 @@ int hdfsBuilderConfGetInt(struct hdfsBuilder *bld, const char *key, int32_t *val
 /**
  * Logging functions
  **/
+class CForwardingLogger : public LoggerInterface {
+ public:
+  CForwardingLogger() : callback_(nullptr) {};
+
+  // Converts LogMessage into LogData, a POD type,
+  // and invokes callback_ if it's not null.
+  void Write(const LogMessage& msg);
+
+  // pass in NULL to clear the hook
+  void SetCallback(void (*callback)(LogData*));
+
+  //return a copy, or null on failure.
+  static LogData *CopyLogData(const LogData*);
+  //free LogData allocated with CopyLogData
+  static void FreeLogData(LogData*);
+ private:
+  void (*callback_)(LogData*);
+};
+
+/**
+ *  Plugin to forward message to a C function pointer
+ **/
+void CForwardingLogger::Write(const LogMessage& msg) {
+  if(!callback_)
+    return;
+
+  const std::string text = msg.MsgString();
+
+  LogData data;
+  data.level = msg.level();
+  data.component = msg.component();
+  data.msg = text.c_str();
+  data.file_name = msg.file_name();
+  data.file_line = msg.file_line();
+  callback_(&data);
+}
+
+void CForwardingLogger::SetCallback(void (*callback)(LogData*)) {
+  callback_ = callback;
+}
+
+LogData *CForwardingLogger::CopyLogData(const LogData *orig) {
+  if(!orig)
+    return nullptr;
+
+  LogData *copy = (LogData*)malloc(sizeof(LogData));
+  if(!copy)
+    return nullptr;
+
+  copy->level = orig->level;
+  copy->component = orig->component;
+  if(orig->msg)
+    copy->msg = strdup(orig->msg);
+  copy->file_name = orig->file_name;
+  copy->file_line = orig->file_line;
+  return copy;
+}
+
+void CForwardingLogger::FreeLogData(LogData *data) {
+  if(!data)
+    return;
+  if(data->msg)
+    free((void*)data->msg);
+
+  // Inexpensive way to help catch use-after-free
+  memset(data, 0, sizeof(LogData));
+  free(data);
+}
+
 
 LogData *hdfsCopyLogData(LogData *data) {
   return CForwardingLogger::CopyLogData(data);
@@ -629,8 +774,21 @@ static bool IsLevelValid(int component) {
   return true;
 }
 
-static bool IsComponentValid(int level) {
-  if(level < HDFSPP_LOG_COMPONENT_UNKNOWN || level > HDFSPP_LOG_COMPONENT_FILESYSTEM)
+//  should use  __builtin_popcnt as optimization on some platforms
+static int popcnt(int val) {
+  int bits = sizeof(val) * 8;
+  int count = 0;
+  for(int i=0; i<bits; i++) {
+    if((val >> i) & 0x1)
+      count++;
+  }
+  return count;
+}
+
+static bool IsComponentValid(int component) {
+  if(component < HDFSPP_LOG_COMPONENT_UNKNOWN || component > HDFSPP_LOG_COMPONENT_FILESYSTEM)
+    return false;
+  if(popcnt(component) != 1)
     return false;
   return true;
 }

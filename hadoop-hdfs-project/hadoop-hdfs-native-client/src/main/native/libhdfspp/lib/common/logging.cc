@@ -30,80 +30,42 @@ namespace hdfs
 LogManager::LogManager() {}
 std::unique_ptr<LoggerInterface> LogManager::logger_impl_(new StderrLogger());
 std::mutex LogManager::impl_lock_;
-#define GET_IMPL_LOCK std::lock_guard<std::mutex> impl_lock(impl_lock_);
+uint32_t LogManager::component_mask_ = 0xFFFFFFFF;
+uint32_t LogManager::level_threshold_ = kWarning;
 
 void LogManager::DisableLogForComponent(LogSourceComponent c) {
   // AND with all bits other than one we want to unset
-  GET_IMPL_LOCK
-  if(logger_impl_)
-    logger_impl_->DisableLoggingForComponent(c);
+  std::lock_guard<std::mutex> impl_lock(impl_lock_);
+  component_mask_ &= ~c;
 }
 
 void LogManager::EnableLogForComponent(LogSourceComponent c) {
   // OR with bit to set
-  GET_IMPL_LOCK
-  if(logger_impl_)
-    logger_impl_->EnableLoggingForComponent(c);
+  std::lock_guard<std::mutex> impl_lock(impl_lock_);
+  component_mask_ |= c;
 }
 
 void LogManager::SetLogLevel(LogLevel level) {
-  GET_IMPL_LOCK
-  if(logger_impl_)
-    logger_impl_->SetLogLevel(level);
-}
-
-bool LogManager::ShouldLog(LogLevel level, LogSourceComponent source) {
-  GET_IMPL_LOCK
-  if(logger_impl_)
-    return logger_impl_->ShouldLog(level, source);
-  return false;
+  std::lock_guard<std::mutex> impl_lock(impl_lock_);
+  level_threshold_ = level;
 }
 
 void LogManager::Write(const LogMessage& msg) {
-  GET_IMPL_LOCK
+  std::lock_guard<std::mutex> impl_lock(impl_lock_);
   if(logger_impl_)
     logger_impl_->Write(msg);
 }
 
 void LogManager::SetLoggerImplementation(std::unique_ptr<LoggerInterface> impl) {
-  GET_IMPL_LOCK
-  logger_impl_.reset(nullptr);
+  std::lock_guard<std::mutex> impl_lock(impl_lock_);
   logger_impl_.reset(impl.release());
 }
 
 
 /**
- *  Encapsulate all the nasty bitwise stuff that all derivitives of the LoggerInterface
- *  need to have in common.  Don't want this to be a virtual call.
- **/
-bool LoggerInterface::ShouldLog(LogLevel level, LogSourceComponent component) {
-  if(level < level_threshold_)
-    return false;
-  if(!(component & component_mask_))
-    return false;
-  return true;
-}
-
-void LoggerInterface::EnableLoggingForComponent(LogSourceComponent c) {
-  component_mask_ |= c;
-}
-
-void LoggerInterface::DisableLoggingForComponent(LogSourceComponent c) {
-  component_mask_ &= ~c;
-}
-
-void LoggerInterface::SetLogLevel(LogLevel level) {
-  std::cerr << "SETLOGLEVEL_CALLED_" << std::endl;
-  level_threshold_ = level;
-}
-
-/**
  *  Simple plugin to dump logs to stderr
  **/
 void StderrLogger::Write(const LogMessage& msg) {
-  if(!msg.is_worth_reporting())
-    return;
-
   std::stringstream formatted;
 
   if(show_level_)
@@ -114,16 +76,30 @@ void StderrLogger::Write(const LogMessage& msg) {
 
   if(show_timestamp_) {
     time_t current_time = std::time(nullptr);
-    //asctime appends a \n, so null that out
-    char * timestr = std::asctime(std::localtime(&current_time));
-    int len = strlen(timestr);
-    if(len >=2)
-      timestr[len-1] = 0;
-    formatted << '[' << timestr << ']';
+    char timestr[128];
+    memset(timestr, 0, 128);
+    int res = std::strftime(timestr, 128, "%a %b %e %H:%M:%S %Y", std::localtime(&current_time));
+    if(res > 0) {
+      formatted << '[' << (const char*)timestr << ']';
+    } else {
+      formatted << "[Error formatting timestamp]";
+    }
   }
 
   if(show_component_) {
     formatted << "[Thread id = " << std::this_thread::get_id() << ']';
+  }
+
+  if(show_file_) {
+    //  __FILE__ contains absolute path, which is giant if doing a build inside the
+    //  Hadoop tree.  Trim down to relative to libhdfspp/
+    std::string abs_path(msg.file_name());
+    size_t rel_path_idx = abs_path.find("libhdfspp/");
+    //  Default to whole string if library is being built in an odd way
+    if(rel_path_idx == std::string::npos)
+      rel_path_idx = 0;
+
+    formatted << '[' << (const char*)&abs_path[rel_path_idx] << ":" << msg.file_line() << ']';
   }
 
   std::cerr << formatted.str() << "    " << msg.MsgString() << std::endl;
@@ -142,125 +118,68 @@ void StderrLogger::set_show_component(bool show) {
   show_component_ = show;
 }
 
-/**
- *  Plugin to forward message to a C function pointer
- **/
-void CForwardingLogger::Write(const LogMessage& msg) {
-  if(!msg.is_worth_reporting())
-    return;
-
-  if(!callback_)
-    return;
-
-  const std::string text = msg.MsgString();
-
-  LogData data;
-  data.level = msg.level();
-  data.component = msg.component();
-  data.msg = text.c_str();
-  callback_(&data);
-}
-
-void CForwardingLogger::SetCallback(void (*callback)(LogData*)) {
-  callback_ = callback;
-}
-
-LogData *CForwardingLogger::CopyLogData(const LogData *orig) {
-  if(!orig)
-    return nullptr;
-
-  LogData *copy = (LogData*)malloc(sizeof(LogData));
-  if(!copy)
-    return nullptr;
-
-  copy->level = orig->level;
-  copy->component = orig->component;
-  if(orig->msg)
-    copy->msg = strdup(orig->msg);
-  return copy;
-}
-
-void CForwardingLogger::FreeLogData(LogData *data) {
-  if(!data)
-    return;
-  if(data->msg)
-    free((void*)data->msg);
-
-  // Inexpensive way to help catch use-after-free
-  memset(data, 0, sizeof(LogData));
-  free(data);
-}
-
 
 LogMessage::~LogMessage() {
-  if(worth_reporting_)
-    LogManager::Write(*this);
+  LogManager::Write(*this);
 }
 
 LogMessage& LogMessage::operator<<(const std::string *str) {
-  if(str && worth_reporting_)
+  if(str)
     msg_buffer_ << str;
+  else
+    msg_buffer_ << "<nullptr>";
   return *this;
 }
 
 LogMessage& LogMessage::operator<<(const std::string& str) {
-  if(worth_reporting_)
-    msg_buffer_ << str;
+  msg_buffer_ << str;
   return *this;
 }
 
 LogMessage& LogMessage::operator<<(const char *str) {
-  if(str && worth_reporting_) {
+  if(str)
     msg_buffer_ << str;
-  }
+  else
+    msg_buffer_ << "<nullptr>";
   return *this;
 }
 
 LogMessage& LogMessage::operator<<(bool val) {
-  if(worth_reporting_) {
-    if(val)
-      msg_buffer_ << "true";
-    else
-      msg_buffer_ << "false";
-  }
+  if(val)
+    msg_buffer_ << "true";
+  else
+    msg_buffer_ << "false";
   return *this;
 }
 
 LogMessage& LogMessage::operator<<(int32_t val) {
-  if(worth_reporting_)
-    msg_buffer_ << val;
+  msg_buffer_ << val;
   return *this;
 }
 
 LogMessage& LogMessage::operator<<(uint32_t val) {
-  if(worth_reporting_)
-    msg_buffer_ << val;
+  msg_buffer_ << val;
   return *this;
 }
 
 LogMessage& LogMessage::operator<<(int64_t val) {
-  if(worth_reporting_)
-    msg_buffer_ << val;
+  msg_buffer_ << val;
   return *this;
 }
 
 LogMessage& LogMessage::operator<<(uint64_t val) {
-  if(worth_reporting_)
-    msg_buffer_ << val;
+  msg_buffer_ << val;
   return *this;
 }
 
 
 LogMessage& LogMessage::operator<<(void *ptr) {
-  if(worth_reporting_)
-    msg_buffer_ << ptr;
+  msg_buffer_ << ptr;
   return *this;
 }
 
 std::string LogMessage::MsgString() const {
-  if(worth_reporting_)
-    return msg_buffer_.str();
-  return "";
+  return msg_buffer_.str();
 }
 
 const char * kLevelStrings[5] = {

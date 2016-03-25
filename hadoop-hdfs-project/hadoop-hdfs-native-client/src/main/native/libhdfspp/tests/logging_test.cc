@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-#include <common/logging.h>
+#include <bindings/c/hdfs.cc>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -146,13 +146,41 @@ void assert_no_filehandle_logged() { ASSERT_EQ(log_state_instance.origin_filehan
 void assert_no_filesystem_logged() { ASSERT_EQ(log_state_instance.origin_filesystem, 0); }
 
 void log_all_components_at_level(LogLevel lvl) {
-  LogMessage(lvl, kUnknown)     << "a";
-  LogMessage(lvl, kRPC)         << "b";
-  LogMessage(lvl, kBlockReader) << "c";
-  LogMessage(lvl, kFileHandle)  << "d";
-  LogMessage(lvl, kFileSystem)  << "e";
+  if(lvl == kTrace) {
+    LOG_TRACE(kUnknown, << 'a');
+    LOG_TRACE(kRPC, << 'b');
+    LOG_TRACE(kBlockReader, << 'c');
+    LOG_TRACE(kFileHandle, << 'd');
+    LOG_TRACE(kFileSystem, << 'e');
+  } else if (lvl == kDebug) {
+    LOG_DEBUG(kUnknown, << 'a');
+    LOG_DEBUG(kRPC, << 'b');
+    LOG_DEBUG(kBlockReader, << 'c');
+    LOG_DEBUG(kFileHandle, << 'd');
+    LOG_DEBUG(kFileSystem, << 'e');
+  } else if (lvl == kInfo) {
+    LOG_INFO(kUnknown, << 'a');
+    LOG_INFO(kRPC, << 'b');
+    LOG_INFO(kBlockReader, << 'c');
+    LOG_INFO(kFileHandle, << 'd');
+    LOG_INFO(kFileSystem, << 'e');
+  } else if (lvl == kWarning) {
+    LOG_WARN(kUnknown, << 'a');
+    LOG_WARN(kRPC, << 'b');
+    LOG_WARN(kBlockReader, << 'c');
+    LOG_WARN(kFileHandle, << 'd');
+    LOG_WARN(kFileSystem, << 'e');
+  } else if (lvl == kError) {
+    LOG_ERROR(kUnknown, << 'a');
+    LOG_ERROR(kRPC, << 'b');
+    LOG_ERROR(kBlockReader, << 'c');
+    LOG_ERROR(kFileHandle, << 'd');
+    LOG_ERROR(kFileSystem, << 'e');
+  } else {
+    // A level was added and not accounted for here
+    ASSERT_TRUE(false);
+  }
 }
-
 
 // make sure everything can be masked
 TEST(LoggingTest, MaskAll) {
@@ -245,77 +273,77 @@ TEST(LoggingTest, Levels) {
   LogManager::EnableLogForComponent(kUnknown);
   LogManager::SetLogLevel(kError);
 
-  LogMessage(kTrace, kUnknown)   << "a";
-  LogMessage(kDebug, kUnknown)   << "b";
-  LogMessage(kInfo, kUnknown)    << "c";
-  LogMessage(kWarning, kUnknown) << "d";
+  LOG_TRACE(kUnknown, << "a");
+  LOG_DEBUG(kUnknown, << "b");
+  LOG_INFO(kUnknown,<< "c");
+  LOG_WARN(kUnknown, << "d");
   assert_nothing_logged();
-  LogMessage(kError, kUnknown)   << "e";
+  LOG_ERROR(kUnknown, << "e");
   assert_error_logged();
   assert_unknown_logged();
   log_state_instance.reset();
 
   // anything >= warning
   LogManager::SetLogLevel(kWarning);
-  LogMessage(kTrace, kUnknown)   << "a";
-  LogMessage(kDebug, kUnknown)   << "b";
-  LogMessage(kInfo, kUnknown)    << "c";
+  LOG_TRACE(kUnknown, << "a");
+  LOG_DEBUG(kUnknown, << "b");
+  LOG_INFO(kUnknown, << "c");
   assert_nothing_logged();
-  LogMessage(kWarning, kUnknown) << "d";
+  LOG_WARN(kUnknown, << "d");
   assert_warning_logged();
-  LogMessage(kError, kUnknown)   << "e";
+  LOG_ERROR(kUnknown, << "e");
   assert_error_logged();
   log_state_instance.reset();
 
   // anything >= info
   LogManager::SetLogLevel(kInfo);
-  LogMessage(kTrace, kUnknown)   << "a";
-  LogMessage(kDebug, kUnknown)   << "b";
+  LOG_TRACE(kUnknown, << "a");
+  LOG_DEBUG(kUnknown, << "b");
   assert_nothing_logged();
-  LogMessage(kInfo, kUnknown)    << "c";
+  LOG_INFO(kUnknown, << "c");
   assert_info_logged();
-  LogMessage(kWarning, kUnknown) << "d";
+  LOG_WARN(kUnknown, << "d");
   assert_warning_logged();
-  LogMessage(kError, kUnknown)   << "e";
+  LOG_ERROR(kUnknown, << "e");
   assert_error_logged();
   log_state_instance.reset();
 
   // anything >= debug
   LogManager::SetLogLevel(kDebug);
-  LogMessage(kTrace, kUnknown)   << "a";
+  LOG_TRACE(kUnknown, << "a");
   assert_nothing_logged();
-  LogMessage(kDebug, kUnknown)   << "b";
+  LOG_DEBUG(kUnknown, << "b");
   assert_debug_logged();
   assert_no_info_logged();
   assert_no_warning_logged();
   assert_no_error_logged();
-  LogMessage(kInfo, kUnknown)    << "c";
+  LOG_INFO(kUnknown, << "c");
   assert_info_logged();
   assert_no_warning_logged();
   assert_no_error_logged();
-  LogMessage(kWarning, kUnknown) << "d";
+  LOG_WARN(kUnknown, << "d");
   assert_warning_logged();
   assert_no_error_logged();
-  LogMessage(kError, kUnknown)   << "e";
+  LOG_ERROR(kUnknown, << "e");
   assert_error_logged();
   log_state_instance.reset();
 
   // anything
   LogManager::SetLogLevel(kTrace);
   assert_nothing_logged();
-  LogMessage(kTrace, kUnknown)   << "a";
+  LOG_TRACE(kUnknown, << "a");
   assert_trace_logged();
   log_state_instance.reset();
-  LogMessage(kDebug, kUnknown)   << "b";
+  LOG_DEBUG(kUnknown, << "b");
   assert_debug_logged();
   log_state_instance.reset();
-  LogMessage(kInfo, kUnknown)    << "c";
+  LOG_INFO(kUnknown, << "c");
   assert_info_logged();
   log_state_instance.reset();
-  LogMessage(kWarning, kUnknown) << "d";
+  LOG_WARN(kUnknown, << "d");
   assert_warning_logged();
   log_state_instance.reset();
-  LogMessage(kError, kUnknown)   << "e";
+  LOG_ERROR(kUnknown, << "e");
   assert_error_logged();
 }
 
@@ -323,7 +351,7 @@ TEST(LoggingTest, Text) {
   LogManager::EnableLogForComponent(kRPC);
 
   std::string text;
-  LogMessage(kError, kRPC) << text;
+  LOG_ERROR(kRPC, << text);
 
   ASSERT_EQ(text, log_state_instance.msg);
 }
@@ -337,5 +365,7 @@ int main(int argc, char *argv[]) {
   // The following line must be executed to initialize Google Mock
   // (and Google Test) before running the tests.
   ::testing::InitGoogleMock(&argc, argv);
-  return RUN_ALL_TESTS();
+  int res = RUN_ALL_TESTS();
+  google::protobuf::ShutdownProtobufLibrary();
+  return res;
 }
