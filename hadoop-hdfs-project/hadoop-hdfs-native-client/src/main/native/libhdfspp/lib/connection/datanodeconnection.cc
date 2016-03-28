@@ -46,6 +46,7 @@ DataNodeConnectionImpl::DataNodeConnectionImpl(asio::io_service * io_service,
 
 void DataNodeConnectionImpl::Connect(
              std::function<void(Status status, std::shared_ptr<DataNodeConnection> dn)> handler) {
+
   // Keep the DN from being freed until we're done
   auto shared_this = shared_from_this();
   asio::async_connect(*conn_, endpoints_.begin(), endpoints_.end(),
@@ -55,9 +56,7 @@ void DataNodeConnectionImpl::Connect(
 }
 
 void DataNodeConnectionImpl::Cancel() {
-  // best to do a shutdown() first for portability
-  conn_->shutdown(asio::ip::tcp::socket::shutdown_both);
-  conn_->close();
+  conn_.reset();
 }
 
 

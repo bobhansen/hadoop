@@ -302,10 +302,10 @@ void RpcConnectionImpl<NextLayer>::OnRecvCompleted(const ::asio::error_code &ori
 
   std::shared_ptr<RpcConnection> shared_this = shared_from_this();
 
-  if (random() % 100 == 0) {
-    LOG_DEBUG(kRPC, << "RpcConnectionImpl -- Simulating error");
-    my_ec = std::make_error_code(std::errc::network_down);
-  }
+  //if (/*random() % 100*/ 1 == 0) {
+  //  LOG_DEBUG(kRPC, << "RpcConnectionImpl -- Simulating error");
+  //  my_ec = std::make_error_code(std::errc::network_down);
+  //}
 
   switch (my_ec.value()) {
     case 0:
