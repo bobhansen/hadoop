@@ -184,7 +184,7 @@ void RpcEngine::RpcCommsError(
   if (haveRequests) {
     bool needNewConnection = !conn_;
     if (needNewConnection) {
-      conn_ = NewConnection();
+      conn_ = InitializeConnection();
       conn_->PreEnqueueRequests(pendingRequests);
 
       if (head_action->delayMillis > 0) {

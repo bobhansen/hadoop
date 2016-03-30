@@ -290,24 +290,27 @@ void RpcConnectionImpl<NextLayer>::FlushPendingRequests() {
 
 
 template <class NextLayer>
-void RpcConnectionImpl<NextLayer>::OnRecvCompleted(const ::asio::error_code &original_ec,
+void RpcConnectionImpl<NextLayer>::OnRecvCompleted(const ::asio::error_code &asio_ec,
                                                    size_t) {
   using std::placeholders::_1;
   using std::placeholders::_2;
   std::lock_guard<std::mutex> state_lock(connection_state_lock_);
 
-  ::asio::error_code my_ec(original_ec);
-
-  LOG_DEBUG(kRPC, << "RpcConnectionImpl::OnRecvCompleted called");
+  LOG_TRACE(kRPC, << "RpcConnectionImpl::OnRecvCompleted called");
 
   std::shared_ptr<RpcConnection> shared_this = shared_from_this();
 
-  //if (/*random() % 100*/ 1 == 0) {
-  //  LOG_DEBUG(kRPC, << "RpcConnectionImpl -- Simulating error");
-  //  my_ec = std::make_error_code(std::errc::network_down);
-  //}
+  ::asio::error_code ec = asio_ec;
+  if(event_handlers_) {
+    auto event_resp = event_handlers_->call(FS_NN_READ_EVENT, cluster_name_.c_str(), 0);
+#ifndef NDEBUG
+    if (event_resp.response() == event_response::kTest_Error) {
+        ec = std::make_error_code(std::errc::network_down);
+    }
+#endif
+  }
 
-  switch (my_ec.value()) {
+  switch (ec.value()) {
     case 0:
       // No errors
       break;
@@ -316,8 +319,8 @@ void RpcConnectionImpl<NextLayer>::OnRecvCompleted(const ::asio::error_code &ori
       LOG_DEBUG(kRPC, << "RpcConnectionImpl::OnRecvCompleted asio::error::operation_aborted");
       return;
     default:
-      LOG_WARN(kRPC, << "Network error during RPC read: " << my_ec.message());
-      CommsError(ToStatus(my_ec));
+      LOG_WARN(kRPC, << "Network error during RPC read: " << ec.message());
+      CommsError(ToStatus(ec));
       return;
   }
 
